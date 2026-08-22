@@ -124,8 +124,14 @@ def enforce(notes, tempo, max_passes: int = 4, hopo_ticks: int | None = None):
                        and (cur - prev) < hopo_ticks)
             if cost(prev_lanes, lanes, is_hopo) <= available:
                 continue
-            if len(lanes) > 1:
-                demote.add(cur)
+            # Simplify EITHER side: the shape-change cost belongs to the
+            # pair, and only ever demoting the later position left the very
+            # first note of a chart unfixable, since it is never a `cur`.
+            if len(lanes) > 1 or len(prev_lanes) > 1:
+                if len(lanes) > 1:
+                    demote.add(cur)
+                if len(prev_lanes) > 1:
+                    demote.add(prev)
             elif cur % (res // 2) != 0:
                 drop.add(cur)
 

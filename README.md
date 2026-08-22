@@ -339,7 +339,27 @@ numbered, not named: segmentation finds *where* the song changes but not whether
 a part is a chorus, and wrong labels are worse than none for practice-mode
 navigation.
 
-**Taps and forced flags are deliberately not generated.** Both are written as
+**Taps are deliberately not generated — and the data says that is right.**
+No authoring guideline anywhere states when a tap is appropriate: YARN says
+only "use them sensibly based on the instrument and texture", the Chorus
+Encore scanner has no tap rule at all (it tracks `hasTapNotes` purely as
+metadata), and RBN/C3 never mentions them because Rock Band has no such note.
+So `tools/study_taps.py` measured the local library instead — 129 human
+charts, 76% of which use taps:
+
+| tier | tap share of positions | spacing before a tap vs everything else |
+| :-- | --: | :-- |
+| Expert | 30% | 46% vs 43% within a 16th (**1.06x**) |
+| Hard | 27% | 19% vs 26% (**0.72x**) |
+| Medium | 29% | 10% vs 15% (**0.68x**) |
+| Easy | 29% | 10% vs 19% (**0.54x**) |
+
+Medians are identical at every tier, and on the lower tiers tapped notes are
+*slower* than average. **Speed is not the trigger** — a "tap the fast runs"
+rule would invent a pattern real charters do not follow. Taps also appear at
+~29% even on Easy, so they are not an advanced-technique marker either. They
+track instrument texture, which is an interpretive judgement, so generating
+them would be guessing. Forced flags are skipped for the same reason. Both are written as
 `N 6` / `N 5` lines, and the vendored reducer treats them as ordinary notes: for
 Medium it keeps `notes[:2]`, so a single note plus a flag keeps the flag while a
 chord plus a flag silently drops it. Tiers would disagree about which notes are

@@ -335,9 +335,15 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
 
     tier = rating.rate_expert(expert, tempo)
     progress(f"      difficulty rating: {tier}/6")
+    # The menu preview should land on an interesting part, not the intro.
+    # Star power already marks the densest bar-aligned windows, so its first
+    # phrase is the best "hook" estimate we have; otherwise a quarter in.
+    preview_ms = int(duration_s * 250)
+    if star_power:
+        preview_ms = int(tempo.beat_to_time(star_power[0][0] / res) * 1000)
     (song_dir / "song.ini").write_text(
         chartio.write_song_ini(meta, int(duration_s * 1000), hopos=opts.hopos,
-                               diff_guitar=tier),
+                               diff_guitar=tier, preview_start_ms=preview_ms),
         encoding="utf-8",
     )
 

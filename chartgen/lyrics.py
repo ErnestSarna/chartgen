@@ -45,9 +45,24 @@ def _load_model(progress):
     return _MODEL
 
 
+# In .chart, a handful of ASCII characters are lyric MARKUP rather than text
+# (per the format spec): '-' and '=' join this syllable to the next one, '_'
+# stands in for a space, and '#^*%$/<>' are pitch/display directives. Whisper
+# writes ordinary punctuation — a transcribed "well-known" would silently
+# swallow the following word on the highway. Double quotes would end the
+# E "..." line outright.
+_AS_SPACE = "-=_"
+_DROP = '+#^*%$/<>"§'
+
+
 def _clean(word: str) -> str:
-    # Inner double quotes would terminate the E "..." chart line early.
-    return word.strip().replace('"', "").replace("=", "-")
+    """Strip .chart lyric markup so transcribed words display as written."""
+    text = word.strip()
+    for char in _AS_SPACE:
+        text = text.replace(char, " ")
+    for char in _DROP:
+        text = text.replace(char, "")
+    return " ".join(text.split())
 
 
 def transcribe(audio_path: str, tempo, progress=lambda m: None) -> list[tuple[int, str]]:
@@ -69,6 +84,7 @@ def transcribe(audio_path: str, tempo, progress=lambda m: None) -> list[tuple[in
 
     events: list[tuple[int, str]] = []
     words = 0
+    last_end = 0
     for segment in segments:
         if segment.no_speech_prob > QUIET or not segment.words:
             continue
@@ -76,11 +92,15 @@ def transcribe(audio_path: str, tempo, progress=lambda m: None) -> list[tuple[in
         clean_words = [(w, text) for w, text in clean_words if text]
         if not clean_words:
             continue
-        events.append((tick(segment.words[0].start), "phrase_start"))
+        # Open the phrase half a beat early — never before the previous one
+        # closed — so the line is on screen by the time it is sung.
+        first = tick(clean_words[0][0].start)
+        events.append((max(last_end, first - res // 2, 0), "phrase_start"))
         for w, text in clean_words:
             events.append((tick(w.start), f"lyric {text}"))
             words += 1
-        events.append((tick(segment.end), "phrase_end"))
+        last_end = max(tick(segment.end), first)
+        events.append((last_end, "phrase_end"))
 
     if words:
         progress(f"      {words} words in {sum(1 for _, e in events if e == 'phrase_start')} phrases"

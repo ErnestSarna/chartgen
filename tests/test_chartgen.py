@@ -203,11 +203,14 @@ def test_write_chart_merges_lyrics_into_events_in_tick_order():
     )
     block = text.split("[Events]")[1].split("}")[0]
     lines = [ln.strip() for ln in block.splitlines() if "= E" in ln]
-    assert '480 = E "phrase_start"' in lines[0] or '480 = E "phrase_start"' in lines[1]
     assert any('lyric Hello' in ln for ln in lines)
     assert any('section Section 1' in ln for ln in lines)
     ticks = [int(ln.split(" = ")[0]) for ln in lines]
     assert ticks == sorted(ticks), "events must stay tick-ordered"
+    # A phrase sharing a tick with its own first syllable must still open
+    # first, or that word belongs to the previous phrase.
+    same_tick = [ln for ln in lines if ln.startswith("480 = ")]
+    assert "phrase_start" in same_tick[0], same_tick
 
 
 def test_empty_star_power_phrases_are_dropped():

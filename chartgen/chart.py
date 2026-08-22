@@ -34,6 +34,19 @@ def _tier_block(name: str, notes: list[Note], star_power: list[tuple[int, int]],
     return f"[{name}]\n{{\n{body}\n}}"
 
 
+def _event_rank(text: str) -> int:
+    """Ordering for events sharing a tick.
+
+    A phrase has to open before its own first syllable and close before the
+    next one opens, or the reader attaches that syllable to the wrong phrase
+    — sorting these lines alphabetically put "lyric You" ahead of
+    "phrase_start" and lost the first word of every phrase.
+    """
+    if text.startswith("section "):
+        return 0
+    return {"phrase_end": 1, "phrase_start": 2}.get(text, 3)
+
+
 def write_chart(
     tiers: dict[str, list[Note]],
     tempo: TempoMap,
@@ -54,7 +67,8 @@ def write_chart(
     merged = [(tick, f'section {name}') for tick, name in events]
     merged += [(tick, text) for tick, text in lyrics]
     event_lines = "\n".join(
-        f'  {tick} = E "{text}"' for tick, text in sorted(merged)
+        f'  {tick} = E "{text}"'
+        for tick, text in sorted(merged, key=lambda e: (e[0], _event_rank(e[1]), e[1]))
     )
     blocks = "\n".join(
         _tier_block(name, tiers[name], list(star_power), list(solos))
@@ -88,7 +102,7 @@ def write_chart(
 
 
 def write_song_ini(meta: dict, length_ms: int, hopos: bool = False,
-                   diff_guitar: int = -1) -> str:
+                   diff_guitar: int = -1, preview_start_ms: int = 0) -> str:
     """song.ini so Clone Hero shows real metadata instead of the filename.
 
     diff_guitar is the 0-6 tier badge CH shows in the song list (Rock Band's
@@ -111,8 +125,9 @@ year = {meta.get('year', '')}
 charter = {meta['charter']}
 song_length = {length_ms}
 diff_guitar = {diff_guitar}
+diff_band = {diff_guitar}
 delay = 0
-preview_start_time = 0
+preview_start_time = {preview_start_ms}
 {hopo_line}"""
 
 

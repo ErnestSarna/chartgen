@@ -195,6 +195,45 @@ first star power phrase (the densest window) rather than 0:00 silence, and
 purpose — Clone Hero honours them (`end_events`), and a misplaced one would
 truncate an outro.
 
+## Charting standards the rules come from
+
+There is no single "Clone Hero charting standard" — CH ships no authoring
+guidelines. The de facto rulebook is three sources that largely agree, and
+where they conflict the scanner wins because it is automated:
+
+- **C3/RBN** authoring docs (`docs.c3universe.com` — note its TLS cert has
+  expired, fetch accordingly), inherited from Rock Band Network.
+- **YARN/YARG** submission standards (`wiki.yarg.in`), the modern equivalent.
+- **`scan-chart`** (`github.com/Geomitron/scan-chart`), the scanner behind
+  Chorus Encore, whose hard-coded thresholds decide what gets publicly
+  flagged.
+
+Numbers these gave us, now encoded in the pipeline rather than guessed:
+
+| rule | source | what we do |
+| :-- | :-- | :-- |
+| 1 star power phrase per 40 beats, 1 measure long | RBN | `star_power_phrases`, counted in beats not seconds |
+| No star power in the last ~8 measures | RBN | end guard — CH needs 2 phrases to activate, so late meter is unspendable |
+| Sustains ≥200ms, gaps 50–150ms; scanner errors under 100ms | YARN + scanner | tempo-aware floor in `add_sustains` |
+| No Green+Orange 2-note chord on Hard; no green-to-orange 3-note chord on Expert; no Green+Blue on Medium | scanner + RBN | `reduce.enforce_chord_rules` |
+| Medium = GRYB, Easy = GRY, Easy has no chords | YARN + scanner | lane remaps in `reduce.py` (already matched) |
+| Chords count as ONE note for density | scanner's `maxNps` | our Hard notes/sec cap counts positions (already matched) |
+| Never drag a note out to fill a gap left by reduction | RBN | sustains propagate down from Expert (already matched, with a test) |
+| A lone 120 BPM marker is *the* autochart tell | YARN rejects on it | real tempo map — the first thing this project fixed |
+
+No source anywhere states a maximum notes-per-second for Expert; treat any
+such number as invented. That is why our density is calibrated against a real
+chart library instead. `diff_guitar` is a real 0–6 community scale
+(Custom Songs Central) benchmarked against on-disc songs: 0 sightreadable,
+3 keeps Expert players honest, 5 as hard as the hardest official charts.
+
+One guideline we do **not** yet satisfy: *"only author one guitar part at
+once — it's fine to jump back and forth between guitarists, but you can only
+do one at a time."* Following whatever is loudest moment-to-moment is named
+in the docs as the classic autocharter failure. Our Basic Pitch engine picks
+the loudest pitches per tick, so instrument switching happens mid-phrase
+rather than at section boundaries. Open problem.
+
 ## ⚠️ Licensing — read before sharing anything
 
 **`vendor/audio2chart` has no license file.** No LICENSE, COPYING, or any

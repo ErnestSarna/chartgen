@@ -96,6 +96,10 @@ def build_args(argv):
     ap.add_argument("--no-solos", action="store_true",
                     help="skip solo markers (detected as busy instrumental "
                          "breaks in songs that otherwise have vocals)")
+    ap.add_argument("--no-section-reuse", action="store_true",
+                    help="chart every section independently; by default a "
+                         "repeated chorus reuses the first one's lane choices "
+                         "(human charts overlap 55%% between repeats, ours 13%%)")
     ap.add_argument("--no-star-power", action="store_true")
     ap.add_argument("--no-sections", action="store_true")
     ap.add_argument("--no-sustains", action="store_true")

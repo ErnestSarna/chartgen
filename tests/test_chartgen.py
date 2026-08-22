@@ -1073,6 +1073,43 @@ def test_top_up_sustains_is_bounded_by_the_measured_share():
     assert top_up_sustains(already, res, 200 * res, 0.05) == already
 
 
+def test_section_reuse_copies_lanes_but_keeps_the_repeat_rhythm():
+    """Human charts overlap 55% between repeated sections; ours managed 13%.
+    Reuse must raise that without pasting a section wholesale — the later
+    section keeps whatever rhythm the audio gave it."""
+    from chartgen.structure import find_repeats, reuse_patterns
+
+    res = RESOLUTION
+    bar = 4 * res
+    # Two 4-bar sections. The second has the same rhythm on beats but adds an
+    # extra note the first does not have, and different lanes throughout.
+    first = [(i * res, i % 5, 0) for i in range(16)]
+    second = [(4 * bar + i * res, (i + 2) % 5, 0) for i in range(16)]
+    second.append((4 * bar + res // 2, 3, 0))   # unique to the repeat
+    notes = sorted(first + second)
+
+    out = reuse_patterns(notes, [0, 4 * bar], {1: 0})
+    out_by_tick = {}
+    for tick, lane, _ in out:
+        out_by_tick.setdefault(tick, []).append(lane)
+
+    # Lanes now match the first section wherever the two line up.
+    for i in range(16):
+        assert out_by_tick[4 * bar + i * res] == [i % 5], i
+    # The repeat's own extra note survives untouched.
+    assert out_by_tick[4 * bar + res // 2] == [3]
+    # Timing is never invented or dropped.
+    assert {t for t, _, _ in out} == {t for t, _, _ in notes}
+
+    # find_repeats needs both similar harmony and comparable length.
+    import numpy as np
+    a = np.ones(12) / np.sqrt(12)
+    b = np.zeros(12); b[0] = 1.0
+    assert find_repeats([a, a], [bar, bar]) == {1: 0}
+    assert find_repeats([a, b], [bar, bar]) == {}, "different harmony"
+    assert find_repeats([a, a], [bar, 4 * bar]) == {}, "different length"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

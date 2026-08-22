@@ -284,6 +284,19 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         "charter": f"chartgen ({charted_by})",
     }
 
+    events = () if opts.no_sections else expression.sections(y, sr, tempo)
+    if events and not getattr(opts, "no_section_reuse", False):
+        from . import structure
+
+        ticks = [tick for tick, _ in events]
+        lengths = [b - a for a, b in zip(ticks, ticks[1:])] + [0]
+        signatures = structure.section_signatures(y, sr, tempo, ticks)
+        repeats = structure.find_repeats(signatures, lengths)
+        if repeats:
+            expert = structure.reuse_patterns(expert, ticks, repeats)
+            progress(f"      reused patterns across {len(repeats)} repeated "
+                     f"section(s)")
+
     progress("[4/6] deriving Hard/Medium/Easy")
     check()
     if getattr(opts, "reducer", "chartgen") == "easygen":
@@ -323,7 +336,6 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     star_power = () if opts.no_star_power else expression.star_power_phrases(
         expert, res, duration_s
     )
-    events = () if opts.no_sections else expression.sections(y, sr, tempo)
     lyric_events = ()
     if getattr(opts, "lyrics", True):
         progress("      transcribing vocals for lyrics")

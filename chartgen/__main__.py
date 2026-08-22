@@ -104,6 +104,9 @@ def build_args(argv):
                     help="keep every chord the audio suggests; by default "
                          "chords are capped at 2 notes and a chord following "
                          "a different chord within an 8th drops to its root")
+    ap.add_argument("--no-playability", action="store_true",
+                    help="skip the human-hand simulation that simplifies or "
+                         "drops passages nobody could physically play")
     ap.add_argument("--no-star-power", action="store_true")
     ap.add_argument("--no-sections", action="store_true")
     ap.add_argument("--no-sustains", action="store_true")

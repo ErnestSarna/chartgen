@@ -271,6 +271,16 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             progress(f"      chords: {before} -> {after} positions "
                      f"(human charts use 5-13% on EDM)")
 
+    if not getattr(opts, "no_playability", False):
+        from . import playability
+
+        before = playability.analyse(expert, tempo)["impossible"]
+        expert = playability.enforce(expert, tempo)
+        after = playability.analyse(expert, tempo)["impossible"]
+        if before > after:
+            progress(f"      playability: {before:.1%} -> {after:.1%} of "
+                     f"transitions too fast to play (human median 1.3%)")
+
     max_jump = int(getattr(opts, "max_fret_jump", 2))
     if max_jump < 4:
         before = frets.step_share(expert, 3)

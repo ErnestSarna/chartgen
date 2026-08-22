@@ -1110,6 +1110,56 @@ def test_section_reuse_copies_lanes_but_keeps_the_repeat_rhythm():
     assert find_repeats([a, a], [bar, 4 * bar]) == {}, "different length"
 
 
+def test_tempo_map_extrapolates_past_the_last_detected_beat():
+    """librosa stops tracking beats when a song fades out. np.interp clamps
+    past its last beat, so every outro note quantized onto one tick and charts
+    ended up to 25s early — on both engines, since the tempo map is shared."""
+    t = steady(bpm=120.0, n=32, first=0.5)   # beats end at ~16s
+    last_beat = float(t.beat_times[-1])
+
+    # Ten seconds past the last beat must be ten seconds of ticks further on,
+    # not pinned to the final beat.
+    a = t.quantize(last_beat + 1.0)
+    b = t.quantize(last_beat + 10.0)
+    assert b > a, "outro notes collapsed onto one tick"
+    beats_apart = (b - a) / RESOLUTION
+    assert 17 < beats_apart < 19, f"9s at 120bpm should be ~18 beats, got {beats_apart}"
+
+    # And the mapping round-trips, so sustains and section times stay honest.
+    for probe in (last_beat + 2.0, last_beat + 12.0):
+        tick = t.quantize(probe)
+        assert abs(t.beat_to_time(tick / RESOLUTION) - probe) < 0.3, probe
+
+
+def test_playability_simulator_flags_and_fixes_the_unplayable():
+    """Statistical gates passed charts that no hand could execute. This models
+    the hands: strumming and re-shaping cost time, and the chart supplies a
+    fixed amount. Human charts sit at ~1.3% impossible transitions."""
+    from chartgen.playability import analyse, enforce
+
+    t = steady(bpm=180.0, n=200)
+    res = RESOLUTION
+    # Alternating two-note chords on every 16th at 180 BPM: the hand would
+    # have to re-form a shape every 83ms.
+    brutal = []
+    for i in range(80):
+        tick = i * (res // 4)
+        lanes = (0, 2) if i % 2 == 0 else (2, 4)
+        brutal += [(tick, l, 0) for l in lanes]
+    before = analyse(brutal, t)
+    assert before["impossible"] > 0.5, before
+    assert before["worst"], "should report where it breaks down"
+
+    fixed = enforce(brutal, t)
+    assert analyse(fixed, t)["impossible"] == 0.0
+    assert {n[0] for n in fixed} <= {n[0] for n in brutal}, "no notes invented"
+
+    # A comfortable chart is left completely alone.
+    easy = [(i * res, i % 3, 0) for i in range(32)]
+    assert analyse(easy, t)["impossible"] == 0.0
+    assert enforce(easy, t) == sorted(easy)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

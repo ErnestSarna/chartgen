@@ -40,7 +40,12 @@ class TempoMap:
         bt = self.beat_times
         if beat <= self.pickup_beats:
             return bt[0] * (beat / self.pickup_beats) if self.pickup_beats else 0.0
-        return float(np.interp(beat - self.pickup_beats, np.arange(len(bt)), bt))
+        idx = beat - self.pickup_beats
+        if idx > len(bt) - 1 and len(bt) >= 2:
+            step = bt[-1] - bt[-2]
+            if step > 0:
+                return float(bt[-1] + (idx - (len(bt) - 1)) * step)
+        return float(np.interp(idx, np.arange(len(bt)), bt))
 
     def time_to_beat(self, t: float) -> float:
         """Fractional beat number for an audio timestamp, tick 0 == t 0."""
@@ -48,6 +53,15 @@ class TempoMap:
         if t <= bt[0]:
             # Inside the pickup: linear from tick 0 to the first beat.
             return self.pickup_beats * (t / bt[0]) if bt[0] > 0 else 0.0
+        if t > bt[-1] and len(bt) >= 2:
+            # librosa stops tracking beats once a song fades out, and
+            # np.interp CLAMPS beyond its last beat — so every note in the
+            # outro quantized onto one tick and the chart simply stopped.
+            # Measured: charts ended up to 25s early, at exactly the last
+            # detected beat, on both engines. Carry the final tempo forward.
+            step = bt[-1] - bt[-2]
+            if step > 0:
+                return (len(bt) - 1) + (t - bt[-1]) / step + self.pickup_beats
         # np.interp handles tempo drift by interpolating between real beats
         # instead of assuming one constant BPM.
         idx = np.interp(t, bt, np.arange(len(bt)))

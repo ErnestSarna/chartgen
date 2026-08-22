@@ -100,6 +100,10 @@ def build_args(argv):
                     help="chart every section independently; by default a "
                          "repeated chorus reuses the first one's lane choices "
                          "(human charts overlap 55%% between repeats, ours 13%%)")
+    ap.add_argument("--keep-dense-chords", action="store_true",
+                    help="keep every chord the audio suggests; by default "
+                         "chords are capped at 2 notes and a chord following "
+                         "a different chord within an 8th drops to its root")
     ap.add_argument("--no-star-power", action="store_true")
     ap.add_argument("--no-sections", action="store_true")
     ap.add_argument("--no-sustains", action="store_true")

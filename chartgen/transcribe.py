@@ -18,7 +18,15 @@ import numpy as np
 MIN_PITCH = 40
 # Basic Pitch amplitudes run 0-1; quiet events are usually harmonic ghosts.
 MIN_AMPLITUDE = 0.20
-MAX_CHORD = 3
+# Two, not three. Playtest: three EDM charts were unplayable inside 30
+# seconds, and the human charts of the same songs use 0-10% three-note
+# chords against our 6-17%.
+MAX_CHORD = 2
+# A chord is several strings struck TOGETHER, so its notes have comparable
+# energy. A lead note over a quiet pad is a single note with accompaniment —
+# charting the pad as a second button is what buried the EDM songs in chords
+# (41-54% of positions against a human 5-13%).
+CHORD_AMPLITUDE_RATIO = 0.65
 
 
 def transcribe(audio_path: str, progress=lambda m: None):
@@ -93,6 +101,8 @@ def expert_from_notes(
     notes: list[tuple[int, int, int]] = []
     for tick in ticks:
         group = sorted(by_tick[tick], reverse=True)[:MAX_CHORD]
+        loudest = group[0][0]
+        group = [g for g in group if g[0] >= loudest * CHORD_AMPLITUDE_RATIO]
         lanes: dict[int, float] = {}
         for _, pitch, duration in group:
             lane = fret_of(pitch)

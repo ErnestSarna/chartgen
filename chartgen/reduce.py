@@ -327,3 +327,46 @@ def derive_lower_tiers_vendored(expert_chart_text: str) -> dict[str, list[Note]]
         ]
         tiers[part_name.strip("[]")] = sorted(notes)
     return tiers
+
+
+def simplify_rapid_chords(notes: list[Note], resolution: int,
+                          max_chord: int = 2) -> list[Note]:
+    """Demote chords that arrive too fast to re-shape the hand for.
+
+    Playtest: three charts were unplayable inside 30 seconds — "combos very
+    complex and rapid, some seemed impossible". Against the human charts of
+    the same songs ours carried 41-54% chords where they used 5-13%, and one
+    had 192 chord-to-chord shape changes inside an eighth note where the human
+    chart had none.
+
+    A chord is one hand shape. Changing shape is fine with a beat to do it in;
+    doing it every sixteenth is not, however correct the transcription was.
+    So a chord following a DIFFERENT chord too closely collapses to its root,
+    which keeps the rhythm and the melody line while dropping the contortion.
+    """
+    groups = _by_tick(notes)
+    out: list[Note] = []
+    prev_tick, prev_shape = None, None
+    for tick in sorted(groups):
+        group = groups[tick]
+        fretted = sorted((n for n in group if n[1] != OPEN), key=lambda n: n[1])
+        opens = [n for n in group if n[1] == OPEN]
+        kept = fretted[:max_chord] if fretted else group[:max_chord]
+        shape = tuple(n[1] for n in kept)
+
+        rapid_change = (prev_shape is not None and len(prev_shape) > 1
+                        and shape != prev_shape
+                        and tick - prev_tick < resolution // 2)
+        # A chord is an accent. Human charts place them on beats and eighths;
+        # a chord landing on a sixteenth subdivision mid-run is the thing that
+        # made these charts unplayable, since the hand has to re-shape between
+        # sixteenths. Off-grid chords collapse to their root note.
+        off_grid = tick % (resolution // 2) != 0
+        if len(shape) > 1 and (rapid_change or off_grid):
+            kept = kept[:1]           # keep the root; the melody survives
+            shape = tuple(n[1] for n in kept)
+
+        out.extend(kept)
+        out.extend(opens[:1] if not kept else [])
+        prev_tick, prev_shape = tick, shape
+    return sorted(out)

@@ -243,6 +243,13 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                          engine, audio, duration_s)
 
 
+def _group(notes):
+    out: dict[int, list] = {}
+    for tick, lane, sus in notes:
+        out.setdefault(tick, []).append(lane)
+    return out
+
+
 def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
                   engine, audio, duration_s) -> dict:
     """Everything downstream of Expert-note production, shared by engines:
@@ -253,6 +260,17 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     # Human charts of the same songs jump 3+ lanes on 0-1% of consecutive
     # single notes; ours did it 9-30% of the time. Smooth before reduction so
     # every tier inherits playable hand movement.
+    # Playtest: charts were unplayable inside 30 seconds because harmony was
+    # charted as chords. Do this before the jump smoothing so it sees the
+    # shapes that actually survive.
+    if not getattr(opts, "keep_dense_chords", False):
+        before = sum(1 for _, g in _group(expert).items() if len(g) > 1)
+        expert = reduce.simplify_rapid_chords(expert, res)
+        after = sum(1 for _, g in _group(expert).items() if len(g) > 1)
+        if before > after:
+            progress(f"      chords: {before} -> {after} positions "
+                     f"(human charts use 5-13% on EDM)")
+
     max_jump = int(getattr(opts, "max_fret_jump", 2))
     if max_jump < 4:
         before = frets.step_share(expert, 3)

@@ -57,6 +57,7 @@ def expert_from_notes(
     subdiv: int = 4,
     min_pitch: int = MIN_PITCH,
     min_amplitude: float = MIN_AMPLITUDE,
+    min_sustain_beats: float = 0.5,
 ) -> list[tuple[int, int, int]]:
     """Chart-ready Expert notes [(tick, lane, sustain_ticks)].
 
@@ -101,7 +102,7 @@ def expert_from_notes(
             beats_held = tempo.time_to_beat(
                 tempo.beat_to_time(tick / res) + duration) - tick / res
             sustain = 0
-            if beats_held >= 0.75:
+            if beats_held >= min_sustain_beats:
                 sustain = min(int(beats_held * res) - release, cap)
                 limit = next_tick.get(tick)
                 if limit is not None:

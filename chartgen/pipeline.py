@@ -131,7 +131,9 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
         events = transcribe.transcribe(str(audio), progress)
         check()
         progress("[3/6] building Expert from transcription")
-        expert = transcribe.expert_from_notes(events, tempo, subdiv=opts.subdiv)
+        expert = transcribe.expert_from_notes(
+            events, tempo, subdiv=opts.subdiv,
+            min_sustain_beats=getattr(opts, 'min_sustain_beats', 0.5))
         if getattr(opts, "density", "onset") == "onset":
             before = len({t for t, _, _ in expert})
             expert = density.gate_by_onsets(expert, y, sr, tempo)
@@ -248,6 +250,17 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     res = tempo.resolution
     from . import rating
 
+    # Human charts of the same songs jump 3+ lanes on 0-1% of consecutive
+    # single notes; ours did it 9-30% of the time. Smooth before reduction so
+    # every tier inherits playable hand movement.
+    max_jump = int(getattr(opts, "max_fret_jump", 2))
+    if max_jump < 4:
+        before = frets.step_share(expert, 3)
+        expert = frets.smooth_fret_jumps(expert, tempo, max_step=max_jump)
+        after = frets.step_share(expert, 3)
+        if before > after:
+            progress(f"      fret jumps >=3 lanes: {before:.0%} -> {after:.0%}")
+
     target_diff = getattr(opts, "target_diff", None)
     if target_diff is not None:
         natural = rating.rate_expert(expert, tempo)
@@ -297,6 +310,16 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             tiers, res, end_tick, min_gap_beats=opts.min_sustain_gap,
             bpm=tempo.bpm,
         )
+    if not opts.no_sustains:
+        # Human charts sustain MORE as tiers get easier (8.7% of Expert notes
+        # up to 15.3% on Easy); propagating Expert's lengths down left every
+        # tier flat at Expert's rate.
+        tiers = {
+            name: expression.top_up_sustains(
+                notes, res, end_tick,
+                expression.TIER_SUSTAIN_SHARE.get(name, 0.09))
+            for name, notes in tiers.items()
+        }
     star_power = () if opts.no_star_power else expression.star_power_phrases(
         expert, res, duration_s
     )

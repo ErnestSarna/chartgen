@@ -222,3 +222,58 @@ def sections(y, sr, tempo, beats_per_bar: int = 4) -> list[tuple[int, str]]:
         if not out or tick > out[-1][0]:
             out.append((tick, f"Section {len(out) + 1}"))
     return out
+
+
+# Median sustain share per tier across 49 human charts with a full ladder.
+# Note it RISES as tiers get easier: fewer notes, so each is held longer.
+# Propagating Expert's sustains downward unchanged left every tier flat at
+# Expert's rate, which is why our Easy felt clipped next to a real one.
+TIER_SUSTAIN_SHARE = {
+    "ExpertSingle": 0.087, "HardSingle": 0.111,
+    "MediumSingle": 0.149, "EasySingle": 0.153,
+}
+
+
+def top_up_sustains(
+    notes: list[tuple[int, int, int]],
+    resolution: int,
+    end_tick: int,
+    target_share: float,
+    release_beats: float = 0.25,
+    max_beats: float = 4.0,
+) -> list[tuple[int, int, int]]:
+    """Sustain the roomiest notes until the tier reaches its measured share.
+
+    Deriving sustains from a reduced tier's own gaps was the original mistake
+    — it made 39 of Easy's 40 notes sustains, turning a busy song slow. The
+    bound is what makes it safe now: only the notes with the most space get
+    one, and only until the tier matches what human charts do, so the failure
+    mode is capped by construction rather than by hoping the gaps behave.
+    """
+    if not notes:
+        return notes
+
+    release = int(release_beats * resolution)
+    cap = int(max_beats * resolution)
+    floor = resolution // 2
+
+    ticks = sorted({t for t, _, _ in notes})
+    next_tick = dict(zip(ticks, ticks[1:]))
+    held = {t for t, _, sus in notes if sus > 0}
+    target = int(round(target_share * len(ticks)))
+    if len(held) >= target:
+        return notes
+
+    room = []
+    for tick in ticks:
+        if tick in held:
+            continue
+        gap = next_tick.get(tick, end_tick) - tick
+        length = min(gap - release, cap)
+        if length >= floor:
+            room.append((length, tick))
+    room.sort(reverse=True)
+
+    added = {tick: length for length, tick in room[:max(0, target - len(held))]}
+    return [(t, lane, added.get(t, sus) if sus == 0 else sus)
+            for t, lane, sus in notes]

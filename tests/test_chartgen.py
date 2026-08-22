@@ -1017,6 +1017,62 @@ def test_sixteenth_grid_stays_inside_the_natural_hopo_window():
     assert RESOLUTION // 2 > thr, "8ths must strum, not HOPO"
 
 
+def test_smooth_fret_jumps_matches_human_hand_movement():
+    """Human charts of the same songs jump 3+ lanes on 0-1% of consecutive
+    single notes; ours measured 9-30%. Clamping must kill the teleports while
+    keeping pitch direction, and leave long rests free to relocate."""
+    from chartgen.frets import smooth_fret_jumps, step_share
+
+    t = steady(n=64)
+    res = RESOLUTION
+    teleporting = [(i * (res // 2), 4 if i % 2 == 0 else 0, 0) for i in range(32)]
+    assert step_share(teleporting, 3) > 0.9, "fixture should be all teleports"
+
+    out = smooth_fret_jumps(teleporting, t, max_step=2)
+    assert step_share(out, 3) == 0.0, out[:6]
+    assert [n[0] for n in out] == [n[0] for n in teleporting], "timing moved"
+    assert all(0 <= lane <= 4 for _, lane, _ in out)
+
+    # A rising line still rises — contour is what the guidelines ask for.
+    rising = [(i * (res // 2), min(4, i), 0) for i in range(10)]
+    lanes = [lane for _, lane, _ in smooth_fret_jumps(rising, t, max_step=2)]
+    assert lanes == sorted(lanes), lanes
+
+    # Two beats of rest is enough time to move the hand anywhere.
+    far = [(0, 0, 0), (8 * res, 4, 0)]
+    assert smooth_fret_jumps(far, t, max_step=2) == far
+
+    # Chords move as a unit, keeping their shape.
+    chord = [(0, 0, 0), (0, 2, 0), (res // 2, 3, 0), (res // 2, 4, 0)]
+    out = smooth_fret_jumps(chord, t, max_step=1)
+    second = sorted(lane for tick, lane, _ in out if tick == res // 2)
+    assert second[1] - second[0] == 1, f"chord shape distorted: {second}"
+
+
+def test_top_up_sustains_is_bounded_by_the_measured_share():
+    """Deriving sustains from a reduced tier's own gaps once made 39 of Easy's
+    40 notes sustains. The share bound is what makes it safe to do at all."""
+    from chartgen.expression import TIER_SUSTAIN_SHARE, top_up_sustains
+
+    res = RESOLUTION
+    # Sparse tier with room everywhere: every note COULD sustain.
+    notes = [(i * 4 * res, i % 3, 0) for i in range(40)]
+    out = top_up_sustains(notes, res, end_tick=200 * res,
+                          target_share=TIER_SUSTAIN_SHARE["EasySingle"])
+    share = sum(1 for _, _, sus in out if sus > 0) / len(out)
+    assert 0.10 <= share <= 0.20, f"share {share:.0%} outside the human range"
+
+    # Sustains still never reach the next note.
+    for (tick, _, sus), (nxt, _, _) in zip(out, out[1:]):
+        if nxt != tick:
+            assert tick + sus < nxt, f"sustain at {tick} runs into {nxt}"
+
+    # Notes that already sustain are left alone, and a tier already at target
+    # gains nothing.
+    already = [(i * 4 * res, 0, res) for i in range(10)]
+    assert top_up_sustains(already, res, 200 * res, 0.05) == already
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

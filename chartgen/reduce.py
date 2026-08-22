@@ -175,7 +175,10 @@ def reduce_medium(expert: list[Note], resolution: int) -> list[Note]:
     last_kept = -resolution * 8
     for tick in sorted(groups):
         pos = tick % resolution
-        # Quarters always; anything else only fills a silence of a beat or more.
+        # Quarters always; anything else only fills a silence of a beat or
+        # more. Measured against 49 human charts with a full ladder, this
+        # lands Medium at 56% of Expert's positions against their 55% median
+        # — leave it alone.
         if pos != 0 and tick - last_kept < resolution:
             continue
         out.extend(_cap_chord(groups[tick], 2))
@@ -191,10 +194,16 @@ def reduce_easy(expert: list[Note], resolution: int) -> list[Note]:
         pos = tick % resolution
         on_beat = pos == 0
         gap = tick - last_kept
-        # Half-note pacing, relaxed to quarters where the song would go silent
-        # for a bar, and 8th positions allowed only in that fallback.
-        keep = (on_beat and gap >= 2 * resolution) or (
-            gap >= 4 * resolution and pos % (resolution // 2) == 0
+        # Quarter-note pacing, relaxed to 8th positions where the song would
+        # otherwise go silent for a bar.
+        #
+        # This was half-note pacing, following the RBN guideline's "leave half
+        # note spaces between strums". Measured against 10k real community
+        # charts that is far too sparse: they average ~1.8 notes/sec on Easy
+        # and we produced 0.5. Clone Hero charts are simply denser than the
+        # Rock Band guidance, so the corpus wins over the older document.
+        keep = (on_beat and gap >= resolution) or (
+            gap >= 2 * resolution and pos % (resolution // 2) == 0
         )
         if not keep:
             continue
@@ -236,14 +245,68 @@ def enforce_chord_rules(tiers: dict[str, list[Note]]) -> dict[str, list[Note]]:
     return out
 
 
+
+# Median position counts relative to Expert across 49 human charts in the
+# local library that carry a full four-tier ladder. Grid rules alone drifted
+# well off these (Hard landed at 96% of Expert on one song), so the ratios are
+# enforced as a cap rather than hoped for.
+TIER_RATIO = {"HardSingle": 0.78, "MediumSingle": 0.55, "EasySingle": 0.39}
+
+
+def _thin_to_ratio(ticks: list[int], resolution: int, target: int) -> list[int]:
+    """Drop the least structural positions until at most `target` remain.
+
+    Fine positions go before 8ths and 8ths before beats, so the pulse of the
+    song survives even a heavy cut, and within each class the drops are spread
+    evenly rather than taken from one stretch.
+    """
+    if len(ticks) <= target:
+        return ticks
+
+    def rank(tick: int) -> int:
+        pos = tick % resolution
+        if pos == 0:
+            return 2                     # downbeats are the last to go
+        return 1 if pos == resolution // 2 else 0
+
+    keep = set(range(len(ticks)))
+    need = len(ticks) - target
+    for level in (0, 1, 2):
+        if need <= 0:
+            break
+        idx = [i for i in sorted(keep) if rank(ticks[i]) == level]
+        if not idx:
+            continue
+        take = min(need, len(idx))
+        step = len(idx) / take
+        for j in range(take):
+            keep.discard(idx[int(j * step)])
+        need -= take
+    return [t for i, t in enumerate(ticks) if i in keep]
+
+
 def derive_tiers(expert: list[Note], resolution: int,
                  bpm: float | None = None) -> dict[str, list[Note]]:
     """{'HardSingle': ..., 'MediumSingle': ..., 'EasySingle': ...}"""
-    return {
+    tiers = {
         "HardSingle": reduce_hard(expert, resolution, bpm=bpm),
         "MediumSingle": reduce_medium(expert, resolution),
         "EasySingle": reduce_easy(expert, resolution),
     }
+    expert_positions = len({t for t, _, _ in expert})
+    out: dict[str, list[Note]] = {}
+    # Walk down the ladder: each tier is capped at its measured share of
+    # Expert AND forced strictly below the tier above it. Without the second
+    # clause a uniformly dense song collapses Medium and Easy onto the same
+    # "every beat" grid, which is the scanner's `difficultyNotReduced` error.
+    previous = expert_positions
+    for name in ("HardSingle", "MediumSingle", "EasySingle"):
+        notes = tiers[name]
+        target = max(1, min(int(expert_positions * TIER_RATIO[name]), previous - 1))
+        kept = set(_thin_to_ratio(sorted(_by_tick(notes)), resolution, target))
+        out[name] = [n for n in notes if n[0] in kept]
+        previous = len(kept)
+    return out
 
 
 def derive_lower_tiers_vendored(expert_chart_text: str) -> dict[str, list[Note]]:

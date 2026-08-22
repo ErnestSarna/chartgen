@@ -52,6 +52,14 @@ def build_args(argv):
                          "this; the whole difficulty ladder scales with it. "
                          "Only thins — notes the audio doesn't support are "
                          "never invented to raise a rating")
+    ap.add_argument("--max-fret-jump", type=int, choices=(1, 2, 3, 4), default=2,
+                    metavar="LANES",
+                    help="cap lane movement between consecutive positions "
+                         "(human charts almost never jump 3+); 4 disables")
+    ap.add_argument("--min-sustain-beats", type=float, default=0.5,
+                    metavar="BEATS",
+                    help="transcribed note length needed to become a sustain "
+                         "on the basicpitch engine")
     ap.add_argument("--density", choices=("onset", "model"), default="onset",
                     help="onset: drop notes lacking onset evidence in the "
                          "audio (the model over-generates ~1.4-2x vs human "
@@ -69,7 +77,7 @@ def build_args(argv):
                          "soon as a candidate passes, so a good first roll is free")
     ap.add_argument("--min-variety", type=float, default=0.80, metavar="SCORE",
                     help="0-1 quality bar a chart must clear (see quality.py)")
-    ap.add_argument("--min-sustain-gap", type=float, default=1.0, metavar="BEATS",
+    ap.add_argument("--min-sustain-gap", type=float, default=0.75, metavar="BEATS",
                     help="beats of space before a note sustains; raise for fewer "
                          "sustains (needs playtesting to calibrate)")
     ap.add_argument("--cookies-from", default=None, metavar="BROWSER",

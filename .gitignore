@@ -1,0 +1,14 @@
+# vendor/ stays out of git on purpose: audio2chart has no license, so a repo
+# that ever goes public must not carry it. package.ps1 zips preserve it.
+.venv/
+vendor/
+work/
+out/
+__pycache__/
+*.pyc
+
+# Generated during training/eval sessions — heavy or reproducible.
+data/
+runs/
+lightning_logs/
+*.log

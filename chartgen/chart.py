@@ -1,0 +1,174 @@
+"""Write Clone Hero song folders: notes.chart + song.ini."""
+import re
+from pathlib import Path
+
+from .tempo import TempoMap
+
+TIERS = ("ExpertSingle", "HardSingle", "MediumSingle", "EasySingle")
+
+Note = tuple[int, int, int]  # (tick, lane, sustain_ticks); lane 7 is an open note
+
+
+def _tier_block(name: str, notes: list[Note], star_power: list[tuple[int, int]],
+                solos: list[tuple[int, int]] = ()) -> str:
+    """One difficulty track. Star power and solos are per-track in .chart, so
+    they repeat in every block.
+
+    A phrase covering no notes in this tier is dropped: after reduction a
+    phrase that survives into Easy may have had all its notes removed, and an
+    empty phrase is unactivatable dead weight. Solo markers are the local
+    (unquoted) track-event form CH scores its solo bonus from.
+    """
+    ticks = {t for t, _, _ in notes}
+    lines = [(t, 0, f"  {t} = N {lane} {sus}") for t, lane, sus in notes]
+    lines += [
+        (start, 1, f"  {start} = S 2 {length}")
+        for start, length in star_power
+        if any(start <= t < start + length for t in ticks)
+    ]
+    for start, end in solos:
+        if any(start <= t < end for t in ticks):
+            lines.append((start, 2, f"  {start} = E solo"))
+            lines.append((end, 2, f"  {end} = E soloend"))
+    body = "\n".join(text for _, _, text in sorted(lines))
+    return f"[{name}]\n{{\n{body}\n}}"
+
+
+def write_chart(
+    tiers: dict[str, list[Note]],
+    tempo: TempoMap,
+    meta: dict,
+    audio_filename: str,
+    star_power: list[tuple[int, int]] = (),
+    events: list[tuple[int, str]] = (),
+    lyrics: list[tuple[int, str]] = (),
+    solos: list[tuple[int, int]] = (),
+) -> str:
+    """Render a full .chart: real SyncTrack, sections, lyrics, every difficulty.
+
+    `events` are section names (prefixed "section" for practice mode);
+    `lyrics` are raw event texts (phrase_start / lyric <word> / phrase_end)
+    written verbatim. Both live in [Events], merged in tick order.
+    """
+    sync = "\n".join(f"  {tick} = B {bpm}" for tick, bpm in tempo.sync_track())
+    merged = [(tick, f'section {name}') for tick, name in events]
+    merged += [(tick, text) for tick, text in lyrics]
+    event_lines = "\n".join(
+        f'  {tick} = E "{text}"' for tick, text in sorted(merged)
+    )
+    blocks = "\n".join(
+        _tier_block(name, tiers[name], list(star_power), list(solos))
+        for name in TIERS if tiers.get(name)
+    )
+
+    return f"""[Song]
+{{
+  Name = "{meta['name']}"
+  Artist = "{meta['artist']}"
+  Charter = "{meta['charter']}"
+  Album = "{meta.get('album', '')}"
+  Year = "{meta.get('year', '')}"
+  Offset = 0
+  Resolution = {tempo.resolution}
+  Genre = "{meta.get('genre', '')}"
+  MediaType = "cd"
+  MusicStream = "{audio_filename}"
+}}
+[SyncTrack]
+{{
+  0 = TS 4
+{sync}
+}}
+[Events]
+{{
+{event_lines}
+}}
+{blocks}
+"""
+
+
+def write_song_ini(meta: dict, length_ms: int, hopos: bool = False,
+                   diff_guitar: int = -1) -> str:
+    """song.ini so Clone Hero shows real metadata instead of the filename.
+
+    diff_guitar is the 0-6 tier badge CH shows in the song list (Rock Band's
+    tier system by lineage); chartgen.rating predicts it from the chart,
+    calibrated against the local library. -1 means "unrated".
+
+    hopos=False writes `hopo_frequency = 1`, a 1-tick threshold no two distinct
+    positions can satisfy, so every note strums. This is the clean way to switch
+    HOPOs off: they are implicit in note spacing, and the alternative — stamping a
+    forced-strum `N 5` on every affected note — is exactly the markup the vendored
+    reducer mishandles, which would leave the tiers disagreeing.
+    """
+    hopo_line = "" if hopos else "hopo_frequency = 1\n"
+    return f"""[song]
+name = {meta['name']}
+artist = {meta['artist']}
+album = {meta.get('album', '')}
+genre = {meta.get('genre', '')}
+year = {meta.get('year', '')}
+charter = {meta['charter']}
+song_length = {length_ms}
+diff_guitar = {diff_guitar}
+delay = 0
+preview_start_time = 0
+{hopo_line}"""
+
+
+def summarize(chart_path: Path) -> dict[str, tuple[int, int, int]]:
+    """Per tier: (notes, sustains, star power phrases), for reporting and tests."""
+    text = Path(chart_path).read_text(encoding="utf-8")
+    out = {}
+    for tier in TIERS:
+        block = re.search(rf"\[{tier}\]\s*\{{(.*?)\}}", text, re.S)
+        if not block:
+            continue
+        body = block.group(1)
+        out[tier] = (
+            len(re.findall(r"= N \d+ \d+", body)),
+            len(re.findall(r"= N \d+ [1-9]\d*", body)),
+            len(re.findall(r"= S 2 ", body)),
+        )
+    return out
+
+
+def notes_from_tokens(
+    tokens: list[int],
+    grid_ms: int,
+    tempo: TempoMap,
+    reverse_map: dict[int, tuple[int, ...]],
+    subdiv: int = 4,
+) -> list[Note]:
+    """Turn audio2chart's per-frame tokens into quantized chart notes.
+
+    Each token index is one grid_ms frame; a token maps to the set of lanes held
+    at that instant. Tokens outside reverse_map (pad/bos/eos) are skipped.
+
+    When several frames snap to the same tick, the frame *closest to the tick's
+    true time* wins rather than unioning them all. A 16th at 90 BPM is ~167ms
+    wide — four 40ms frames — and unioning stacked different-lane frames into
+    fake chords: measured on a real song, the model emitted 38 chords and the
+    chart contained 210. Real chords survive intact because the model writes
+    them as one multi-lane frame. Quantizing also caps note density at the
+    subdivision (a 40ms grid would otherwise permit 25 notes/sec).
+    """
+    res = tempo.resolution
+    best: dict[int, tuple[float, tuple[int, ...]]] = {}
+    for frame, token in enumerate(tokens):
+        lanes = reverse_map.get(token)
+        if lanes is None:
+            continue
+        t = frame * grid_ms / 1000.0
+        tick = tempo.quantize(t, subdiv=subdiv)
+        if tick < 0:
+            continue
+        distance = abs(t - tempo.beat_to_time(tick / res))
+        if tick not in best or distance < best[tick][0]:
+            best[tick] = (distance, tuple(lanes))
+
+    notes = []
+    for tick in sorted(best):
+        for lane in sorted(set(best[tick][1])):
+            notes.append((tick, lane, 0))
+    return notes

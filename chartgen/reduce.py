@@ -175,11 +175,12 @@ def reduce_medium(expert: list[Note], resolution: int) -> list[Note]:
     last_kept = -resolution * 8
     for tick in sorted(groups):
         pos = tick % resolution
-        # Quarters always; anything else only fills a silence of a beat or
-        # more. Measured against 49 human charts with a full ladder, this
-        # lands Medium at 56% of Expert's positions against their 55% median
-        # — leave it alone.
-        if pos != 0 and tick - last_kept < resolution:
+        # Beats and 8ths, deliberately generous: the ratio cap in derive_tiers
+        # trims whatever this produces down to the measured 55% of Expert. A
+        # strict rule cannot be trimmed UP, and on songs with sparse downbeats
+        # it left Medium sitting on top of Easy (33% vs 32%) — the scanner's
+        # difficultyNotReduced error.
+        if pos not in (0, resolution // 2):
             continue
         out.extend(_cap_chord(groups[tick], 2))
         last_kept = tick
@@ -194,17 +195,14 @@ def reduce_easy(expert: list[Note], resolution: int) -> list[Note]:
         pos = tick % resolution
         on_beat = pos == 0
         gap = tick - last_kept
-        # Quarter-note pacing, relaxed to 8th positions where the song would
-        # otherwise go silent for a bar.
+        # Downbeats carry Easy; an 8th position is allowed only to break a
+        # silence of two beats or more. Like Medium this is deliberately
+        # generous and trimmed to the measured 39% of Expert afterwards.
         #
-        # This was half-note pacing, following the RBN guideline's "leave half
-        # note spaces between strums". Measured against 10k real community
-        # charts that is far too sparse: they average ~1.8 notes/sec on Easy
-        # and we produced 0.5. Clone Hero charts are simply denser than the
-        # Rock Band guidance, so the corpus wins over the older document.
-        keep = (on_beat and gap >= resolution) or (
-            gap >= 2 * resolution and pos % (resolution // 2) == 0
-        )
+        # Half-note pacing came from the RBN guideline ("leave half note
+        # spaces between strums") and measured far too sparse against real
+        # Clone Hero charts — 0.5 notes/sec where they average ~1.8.
+        keep = on_beat or (gap >= 2 * resolution and pos == resolution // 2)
         if not keep:
             continue
         out.extend(_cap_chord(groups[tick], 1))

@@ -123,6 +123,34 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
              f"{len(tempo.sync_track())} tempo event(s)")
     check()
 
+    engine = getattr(opts, "engine", "audio2chart")
+    if engine == "basicpitch":
+        from . import transcribe
+
+        progress("[2/6] transcribing (Basic Pitch engine)")
+        events = transcribe.transcribe(str(audio), progress)
+        check()
+        progress("[3/6] building Expert from transcription")
+        expert = transcribe.expert_from_notes(events, tempo, subdiv=opts.subdiv)
+        if getattr(opts, "density", "onset") == "onset":
+            before = len({t for t, _, _ in expert})
+            expert = density.gate_by_onsets(expert, y, sr, tempo)
+            after = len({t for t, _, _ in expert})
+            if before > after:
+                progress(f"      density: {before} -> {after} positions")
+        if not expert:
+            raise ValueError(
+                "transcription found no chartable notes — is this audio "
+                "mostly percussion or noise?")
+        best = min(quality.variety_score(expert), quality.walk_score(expert))
+        progress(f"      {quality.describe(expert)}")
+        if best < opts.min_variety:
+            progress(f"      warning: score {best:.2f} below "
+                     f"{opts.min_variety:.2f} (transcription is "
+                     f"deterministic; retries would not change it)")
+        return _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
+                             engine, audio, duration_s)
+
     progress(f"[2/6] loading {opts.model}")
     from .model import PitchCharter, load_charter
 
@@ -209,6 +237,15 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
             "which collapses to 'no note' at every step; use a positive value."
         )
 
+    return _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
+                         engine, audio, duration_s)
+
+
+def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
+                  engine, audio, duration_s) -> dict:
+    """Everything downstream of Expert-note production, shared by engines:
+    difficulty target, reduction, expression, lyrics, art, rating, writing."""
+    res = tempo.resolution
     from . import rating
 
     target_diff = getattr(opts, "target_diff", None)
@@ -226,10 +263,12 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                      f"every generated note)")
 
     name = _display_name(opts, audio)
+    charted_by = ("basic-pitch" if engine == "basicpitch"
+                  else str(opts.model).split("/")[-1])
     meta = {
         "name": name, "artist": opts.artist, "album": opts.album,
         "genre": opts.genre, "year": opts.year,
-        "charter": f"chartgen ({opts.model.split('/')[-1]})",
+        "charter": f"chartgen ({charted_by})",
     }
 
     progress("[4/6] deriving Hard/Medium/Easy")
@@ -244,7 +283,15 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
 
     progress("[5/6] adding sustains, star power, sections")
     end_tick = int(tempo.time_to_beat(duration_s) * res)
-    if not opts.no_sustains:
+    if opts.no_sustains:
+        tiers = {n: [(t, l, 0) for t, l, _ in notes] for n, notes in tiers.items()}
+    elif engine == "basicpitch":
+        # Expert already carries REAL sustains (transcribed note durations);
+        # only propagate them down, never overwrite with the gap heuristic.
+        from . import transcribe
+
+        tiers = transcribe.propagate_sustains(tiers)
+    else:
         tiers = expression.add_sustains_all_tiers(
             tiers, res, end_tick, min_gap_beats=opts.min_sustain_gap
         )

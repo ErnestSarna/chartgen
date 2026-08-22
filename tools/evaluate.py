@@ -116,6 +116,8 @@ def main():
     ap.add_argument("--outdir", type=Path, default=Path("out/eval"))
     ap.add_argument("--model", default="3podi/charter-v1.0-40-M-best-acc")
     ap.add_argument("--conditioner", default=None)
+    ap.add_argument("--engine", choices=("audio2chart", "basicpitch"),
+                    default="audio2chart")
     ap.add_argument("--fret-mode", choices=("pitch", "model"), default="pitch")
     ap.add_argument("--seed", type=int, default=11)
     ap.add_argument("--tolerance-ms", type=float, default=70.0)
@@ -151,7 +153,7 @@ def main():
                 # density pinned to "model" so every eval config measures the
                 # same thing regardless of the CLI default changing.
                 fret_mode=args.fret_mode, seed=args.seed, reducer="chartgen",
-                density="model",
+                density="model", engine=args.engine, lyrics=False,
                 bpm_mult="auto", name=f"eval - {name}"[:76], artist="",
                 album="", genre="", year="",
             )

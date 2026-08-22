@@ -28,6 +28,7 @@ def add_sustains(
     min_gap_beats: float = 1.0,
     release_beats: float = 0.25,
     max_beats: float = 4.0,
+    bpm: float | None = None,
 ) -> list[tuple[int, int, int]]:
     """Sustain a note when the next one is far enough away to hold through.
 
@@ -41,7 +42,13 @@ def add_sustains(
     min_gap = min_gap_beats * resolution
     release = int(release_beats * resolution)
     cap = int(max_beats * resolution)
-    floor = resolution // 2  # shorter than an 8th reads as a tap, not a sustain
+    # Anything shorter reads as a tap rather than a sustain. An eighth note
+    # covers that at moderate tempos, but it is only 150ms at 200 BPM — under
+    # the 200ms the charting standard targets, and near the 100ms where the
+    # Chorus Encore scanner flags a "baby sustain". Take the stricter floor.
+    floor = resolution // 2
+    if bpm:
+        floor = max(floor, int(0.200 * bpm * resolution / 60.0))
 
     ticks = sorted({t for t, _, _ in notes})
     next_tick = dict(zip(ticks, ticks[1:]))
@@ -90,15 +97,23 @@ def star_power_phrases(
     resolution: int,
     duration_s: float,
     beats_per_bar: int = 4,
-    phrase_bars: int = 2,
+    phrase_bars: int = 1,
     min_gap_bars: int = 6,
     min_notes: int = 4,
+    beats_per_phrase: int = 40,
+    end_guard_bars: int = 8,
 ) -> list[tuple[int, int]]:
     """Pick bar-aligned [(start_tick, length_ticks)] star power phrases.
 
-    Phrases go on the densest bars, spaced out so activations are spread across
-    the song rather than bunched. Roughly one per 25s, which lands in the usual
-    range for a hand-made chart.
+    Frequency and length follow the RBN/C3 authoring guideline rather than a
+    guess: one phrase per 40 beats (= one per 10 measures in 4/4), each one
+    measure long. Counting beats rather than seconds matters — the old
+    one-per-25s rule under-filled slow songs and over-filled fast ones.
+
+    Nothing is placed in the last 8 measures: Clone Hero needs half a meter
+    (two phrases) to activate at all, so late star power is meter the player
+    can never spend. Within those rules phrases go on the densest bars, spaced
+    out so activations spread across the song instead of bunching.
     """
     bar = beats_per_bar * resolution
     ticks = sorted(t for t, _, _ in notes)
@@ -106,13 +121,17 @@ def star_power_phrases(
         return []
 
     length = phrase_bars * bar
+    last_usable = ticks[-1] - end_guard_bars * bar
     candidates = []
     for start in range(0, ticks[-1] + 1, bar):
+        if start > last_usable:
+            break
         count = sum(1 for t in ticks if start <= t < start + length)
         if count >= min_notes:
             candidates.append((count, start))
 
-    target = max(2, int(duration_s / 25))
+    played_beats = (ticks[-1] - ticks[0]) / resolution
+    target = max(2, int(played_beats / beats_per_phrase))
     chosen: list[tuple[int, int]] = []
     # Densest first; tie-break on position so the result is deterministic.
     for _, start in sorted(candidates, key=lambda c: (-c[0], c[1])):

@@ -203,6 +203,39 @@ def reduce_easy(expert: list[Note], resolution: int) -> list[Note]:
     return _dedupe(_remap(out, EASY_LANES))
 
 
+def enforce_chord_rules(tiers: dict[str, list[Note]]) -> dict[str, list[Note]]:
+    """Remove chord shapes the community standards call unplayable.
+
+    The Chorus Encore scanner errors on a Green+Orange two-note chord on Hard,
+    and the RBN guidelines keep three-note chords spanning green to orange off
+    Expert as well ("as sparingly as possible" even as a pair). Medium adds no
+    Green+Blue. These are hand contortions rather than musical choices, so the
+    outer note moves inward one lane and keeps its sustain.
+    """
+    out: dict[str, list[Note]] = {}
+    for name, notes in tiers.items():
+        groups = _by_tick(notes)
+        fixed: list[Note] = []
+        for tick in sorted(groups):
+            held = {lane: sus for _, lane, sus in groups[tick]}
+            fretted = sorted(l for l in held if l != OPEN)
+
+            spans_neck = 0 in held and 4 in held
+            if spans_neck and (
+                (name == "HardSingle" and len(fretted) == 2)
+                or (name == "ExpertSingle" and len(fretted) >= 3)
+            ):
+                sus = held.pop(4)
+                held.setdefault(3, sus)
+            if name == "MediumSingle" and 0 in held and 3 in held:
+                sus = held.pop(3)
+                held.setdefault(2, sus)
+
+            fixed.extend((tick, lane, held[lane]) for lane in sorted(held))
+        out[name] = fixed
+    return out
+
+
 def derive_tiers(expert: list[Note], resolution: int,
                  bpm: float | None = None) -> dict[str, list[Note]]:
     """{'HardSingle': ..., 'MediumSingle': ..., 'EasySingle': ...}"""

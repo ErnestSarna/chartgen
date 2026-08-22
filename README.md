@@ -166,6 +166,35 @@ currently all strums with no HOPOs, and only ~13% lighter than Expert. That is a
 reduction-rule problem, not a detection problem, and it is fixable — worth
 confirming it feels as wrong to play as it measures.
 
+## Format compliance (audited against the spec)
+
+`vendor/ChartFormats` is the authoritative format reference, and auditing the
+writer against it caught three defects that were silently wrong in shipped
+charts — all confirmed by inspecting a real generated file, not just reading
+code:
+
+- **Lyric markup.** `-` `=` `_` and `#^*%$/<>` are *markup* in `.chart`, not
+  text: a hyphen joins a syllable to the next one. Any transcribed hyphenated
+  word silently swallowed the following word, and the old cleaner actively
+  created markup by mapping `=` to `-`.
+- **Same-tick event ordering.** Sorting events alphabetically put
+  `lyric <word>` ahead of its own `phrase_start`, so the first word of every
+  phrase attached to the previous phrase. Events are now ranked: sections,
+  `phrase_end`, `phrase_start`, `lyric`.
+- **Phrase lead-in.** Phrases open half a beat before their first syllable
+  (never before the previous phrase closed) so the line is readable when sung.
+
+Also verified correct and left alone: note/modifier values (0-4 frets, 7 open,
+5 forced, 6 tap), `S 2 <length>` star power, unquoted local `E solo` /
+`E soloend` inside instrument tracks vs quoted global `E "section …"`, and the
+natural HOPO threshold of `(65/192) × resolution`.
+
+`song.ini` improvements from the same pass: `preview_start_time` points at the
+first star power phrase (the densest window) rather than 0:00 silence, and
+`diff_band` accompanies `diff_guitar`. **No `end` event is written** on
+purpose — Clone Hero honours them (`end_events`), and a misplaced one would
+truncate an outro.
+
 ## ⚠️ Licensing — read before sharing anything
 
 **`vendor/audio2chart` has no license file.** No LICENSE, COPYING, or any

@@ -665,6 +665,41 @@ def test_reassign_frets_limits_fast_chord_jumps():
         "slow chords should still follow big pitch moves"
 
 
+def test_chord_rules_remove_green_orange_stretches():
+    """Chorus Encore errors on a Green+Orange chord on Hard; RBN keeps
+    green-to-orange three-note chords off Expert too."""
+    from chartgen.reduce import enforce_chord_rules
+
+    tiers = enforce_chord_rules({
+        "ExpertSingle": [(0, 0, 0), (0, 2, 0), (0, 4, 90)],   # 3-note G..O
+        "HardSingle": [(0, 0, 0), (0, 4, 0)],                  # 2-note G+O
+        "MediumSingle": [(0, 0, 0), (0, 3, 0)],                # G+B
+        "EasySingle": [(0, 0, 0)],
+    })
+    for name, notes in tiers.items():
+        lanes = {lane for _, lane, _ in notes}
+        assert not (0 in lanes and 4 in lanes), f"{name} kept a G+O stretch"
+    assert {l for _, l, _ in tiers["MediumSingle"]} == {0, 2}, tiers["MediumSingle"]
+    # The moved note keeps its sustain rather than silently losing it.
+    assert (0, 3, 90) in tiers["ExpertSingle"], tiers["ExpertSingle"]
+    # A two-note G+O on EXPERT is allowed (sparingly) and must survive.
+    kept = enforce_chord_rules({"ExpertSingle": [(0, 0, 0), (0, 4, 0)]})
+    assert {l for _, l, _ in kept["ExpertSingle"]} == {0, 4}
+
+
+def test_star_power_avoids_the_unspendable_ending():
+    """CH needs two phrases to activate, so meter awarded in the last measures
+    can never be spent. RBN: no phrase in roughly the last 8 measures."""
+    res = RESOLUTION
+    bar = 4 * res
+    notes = [(i * (res // 2), i % 5, 0) for i in range(32 * 8)]
+    phrases = star_power_phrases(notes, res, duration_s=120.0)
+    last_note = max(t for t, _, _ in notes)
+    for start, length in phrases:
+        assert start <= last_note - 8 * bar, f"phrase at {start} is too late"
+        assert length == bar, "phrases should be one measure"
+
+
 def test_reduce_keeps_syncopation():
     """An isolated off-beat note is the rhythm; deleting it kills the song."""
     from chartgen.reduce import reduce_hard

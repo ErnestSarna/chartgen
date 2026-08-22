@@ -280,6 +280,7 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     else:
         tiers = {"ExpertSingle": expert,
                  **reduce.derive_tiers(expert, res, bpm=tempo.bpm)}
+    tiers = reduce.enforce_chord_rules(tiers)
 
     progress("[5/6] adding sustains, star power, sections")
     end_tick = int(tempo.time_to_beat(duration_s) * res)
@@ -293,7 +294,8 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         tiers = transcribe.propagate_sustains(tiers)
     else:
         tiers = expression.add_sustains_all_tiers(
-            tiers, res, end_tick, min_gap_beats=opts.min_sustain_gap
+            tiers, res, end_tick, min_gap_beats=opts.min_sustain_gap,
+            bpm=tempo.bpm,
         )
     star_power = () if opts.no_star_power else expression.star_power_phrases(
         expert, res, duration_s

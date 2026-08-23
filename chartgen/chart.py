@@ -37,14 +37,15 @@ def _tier_block(name: str, notes: list[Note], star_power: list[tuple[int, int]],
 def _event_rank(text: str) -> int:
     """Ordering for events sharing a tick.
 
-    A phrase has to open before its own first syllable and close before the
-    next one opens, or the reader attaches that syllable to the wrong phrase
-    — sorting these lines alphabetically put "lyric You" ahead of
-    "phrase_start" and lost the first word of every phrase.
+    Sections lead; everything in the lyric stream keeps the order it was
+    generated in, which is already correct — a phrase opens before its own
+    first syllable and closes before the next one opens. Sorting these lines
+    by text instead put "lyric You" ahead of "phrase_start" and lost the
+    first word of every phrase, and when a whole phrase quantized onto one
+    tick it reordered the words alphabetically: a real chart's outro read
+    "thank i'll and for in next one. see the watching".
     """
-    if text.startswith("section "):
-        return 0
-    return {"phrase_end": 1, "phrase_start": 2}.get(text, 3)
+    return 0 if text.startswith("section ") else 1
 
 
 def write_chart(
@@ -64,11 +65,13 @@ def write_chart(
     written verbatim. Both live in [Events], merged in tick order.
     """
     sync = "\n".join(f"  {tick} = B {bpm}" for tick, bpm in tempo.sync_track())
-    merged = [(tick, f'section {name}') for tick, name in events]
-    merged += [(tick, text) for tick, text in lyrics]
+    # The third field is emission order, and it is the only tie-break: lyric
+    # events must come out in the order they were written, not sorted.
+    merged = [(tick, f'section {name}', i) for i, (tick, name) in enumerate(events)]
+    merged += [(tick, text, i) for i, (tick, text) in enumerate(lyrics)]
     event_lines = "\n".join(
         f'  {tick} = E "{text}"'
-        for tick, text in sorted(merged, key=lambda e: (e[0], _event_rank(e[1]), e[1]))
+        for tick, text, _ in sorted(merged, key=lambda e: (e[0], _event_rank(e[1]), e[2]))
     )
     blocks = "\n".join(
         _tier_block(name, tiers[name], list(star_power), list(solos))

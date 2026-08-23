@@ -37,6 +37,15 @@ FRET_MODES = {
     "Follow the melody (pitch)": "pitch",
     "Raw model output": "model",
 }
+# Transcribing vocals invents words over instrumental outros - Whisper falls
+# back on the YouTube captions it was trained on, and a real chart ended with
+# "Thank you for watching". Looking the song up first avoids the guesswork
+# entirely when someone has already synced it.
+LYRIC_SOURCES = {
+    "Look up online, else listen": "auto",
+    "Look up online only": "online",
+    "Listen to the vocals": "transcribe",
+}
 
 
 def fmt_elapsed(seconds: float) -> str:
@@ -168,8 +177,16 @@ class App:
         ttk.Label(frame, text="(only used by the neural source)",
                   foreground="#666").grid(row=3, column=2, columnspan=2, sticky="w")
 
+        self.lyric_source = tk.StringVar(
+            value=saved.get("lyric_source", list(LYRIC_SOURCES)[0]))
+        ttk.Label(frame, text="Lyrics from").grid(row=4, column=0, sticky="w",
+                                                 pady=(6, 0))
+        ttk.Combobox(frame, textvariable=self.lyric_source,
+                     values=list(LYRIC_SOURCES), state="readonly",
+                     width=26).grid(row=4, column=1, sticky="w", padx=6, pady=(6, 0))
+
         toggles = ttk.Frame(frame)
-        toggles.grid(row=4, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        toggles.grid(row=5, column=0, columnspan=4, sticky="w", pady=(8, 0))
         self.sustains = tk.BooleanVar(value=saved.get("sustains", True))
         self.star_power = tk.BooleanVar(value=saved.get("star_power", True))
         self.sections = tk.BooleanVar(value=saved.get("sections", True))
@@ -283,6 +300,7 @@ class App:
             target_diff=(None if self.target_diff.get() == "Auto"
                          else int(self.target_diff.get())),
             lyrics=self.lyrics.get(),
+            lyric_source=LYRIC_SOURCES.get(self.lyric_source.get(), "auto"),
             name=self.title.get().strip() or None,
             artist=self.artist.get().strip() or "Unknown",
             album="", genre="", year="",
@@ -453,6 +471,7 @@ class App:
             "hopos": self.hopos.get(), "fret_mode": self.fret_mode.get(),
             "target_diff": self.target_diff.get(), "lyrics": self.lyrics.get(),
             "engine": self.engine.get(),
+            "lyric_source": self.lyric_source.get(),
         }
 
     def _on_close(self):

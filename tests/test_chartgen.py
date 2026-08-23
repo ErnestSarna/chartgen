@@ -1160,6 +1160,93 @@ def test_playability_simulator_flags_and_fixes_the_unplayable():
     assert enforce(easy, t) == sorted(easy)
 
 
+def test_lrc_lines_become_ordered_phrases():
+    from chartgen.lyrics import from_lines
+
+    t = steady(bpm=120.0, n=400)
+    lines = [(10.0, "You were the shadow to my light"),
+             (14.0, "Did you feel us"),
+             (60.0, "So lost, I'm faded")]
+    events = from_lines(lines, t, duration_s=200.0)
+
+    words = [e for _, e in events if e.startswith("lyric ")]
+    assert len(words) == 15, words
+    ticks = [tick for tick, e in events if e.startswith("lyric ")]
+    assert ticks == sorted(ticks), "words must never move backwards"
+    # Every phrase opens before its own first word and closes after its last.
+    depth = 0
+    for _, event in events:
+        if event == "phrase_start":
+            assert depth == 0, "phrases must not nest"
+            depth = 1
+        elif event == "phrase_end":
+            assert depth == 1, "phrase closed without opening"
+            depth = 0
+        else:
+            assert depth == 1, "a word landed outside any phrase"
+    assert depth == 0
+
+    # A line before a long instrumental break must not crawl across it: the
+    # third line's words all sit near 60s, not spread to the end of the song.
+    tail = [tick for tick, e in events if e.startswith("lyric ")][-3:]
+    assert max(tail) / t.resolution < 70 * 2, tail
+
+
+def test_lrc_parsing_skips_instrumental_markers():
+    from chartgen.lrclib import parse_lrc
+
+    # Blank timestamps mark instrumental breaks and a lone note glyph marks
+    # a vocalise; both are real information, neither belongs on the highway.
+    body = "\n".join((
+        "[00:11.14]You were the shadow",
+        "[00:14.00]",
+        "[00:20.05] Another star",
+        "[00:17.77]♪",
+    ))
+    lines = parse_lrc(body)
+    assert lines == [(11.14, "You were the shadow"), (20.05, "Another star")], lines
+
+
+def test_invented_outro_is_dropped_but_a_real_ending_survives():
+    from chartgen.lyrics import _drop_invented_tail
+
+    def seg(start, words):
+        step = 0.3
+        return (start, start + step * len(words),
+                [(start + i * step, w) for i, w in enumerate(words)])
+
+    verse = [seg(10.0, ["I", "walk", "alone"]), seg(14.0, ["through", "the", "night"])]
+
+    # Measured in a real chart: eleven words of YouTube caption boilerplate,
+    # every one stamped with the same timestamp, stranded after the outro.
+    hallucinated = (95.0, 96.0, [(95.0, w) for w in
+                                 "Thank you for watching I'll see you in the next one".split()])
+    assert _drop_invented_tail(verse + [hallucinated]) == verse
+
+    # A bare word marooned after a long instrumental break: also invented.
+    assert _drop_invented_tail(verse + [seg(95.0, ["you"])]) == verse
+
+    # But a genuine closing line, sung right after the last verse, stays.
+    ending = seg(17.0, ["and", "then", "I", "was", "alone"])
+    assert _drop_invented_tail(verse + [ending]) == verse + [ending]
+
+
+def test_same_tick_lyrics_keep_their_written_order():
+    from chartgen.chart import write_chart
+
+    t = steady(bpm=120.0, n=64)
+    # Whisper stamps a hallucinated phrase with one timestamp for every word;
+    # sorting those lines by text read "thank i'll and for in next one".
+    words = ["Thank", "you", "for", "watching"]
+    lyrics = [(1920, "phrase_start")] + [(2400, f"lyric {w}") for w in words]         + [(2400, "phrase_end")]
+    chart = write_chart({"ExpertSingle": [(0, 0, 0), (480, 1, 0)]}, t,
+                        {"name": "x", "artist": "y", "charter": "z"},
+                        "song.ogg", lyrics=lyrics)
+    written = [line.split('"')[1] for line in chart.splitlines()
+               if "lyric " in line or "phrase_" in line]
+    assert written == ["phrase_start"] + [f"lyric {w}" for w in words] + ["phrase_end"],         written
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

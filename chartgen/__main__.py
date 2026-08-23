@@ -94,6 +94,13 @@ def build_args(argv):
                     help="transcribe vocals (faster-whisper) into CH lyric "
                          "events so words scroll at the top during play; "
                          "instrumentals detect as such and skip cleanly")
+    ap.add_argument("--lyric-source", choices=("auto", "online", "transcribe"),
+                    default="auto",
+                    help="auto (default): look the song up on LRCLIB for real "
+                         "hand-synced lyrics and transcribe only if it has "
+                         "none. online: LRCLIB or nothing. transcribe: always "
+                         "use faster-whisper, which invents words over "
+                         "instrumental outros")
     ap.add_argument("--hopos", action=argparse.BooleanOptionalAction, default=True,
                     help="allow natural HOPOs (default on). They were off while "
                          "fret choice was a +/-1 walk — every 16th HOPOed — but "

@@ -35,6 +35,21 @@ class TempoMap:
         slope = np.polyfit(idx, self.beat_times, 1)[0]
         return float(60.0 / slope)
 
+    def _tail_step(self) -> float:
+        """Seconds per beat to carry past the last detected beat.
+
+        The single final interval is the wrong thing to use: beats detected
+        during a fade-out are noisy, and one short gap inflated the outro so
+        badly that charts ran 20+ seconds past the end of the audio. The
+        median of the last few intervals is stable and still local enough to
+        follow a song that genuinely slows down.
+        """
+        bt = self.beat_times
+        if len(bt) < 2:
+            return 0.0
+        gaps = np.diff(bt[-9:]) if len(bt) >= 3 else np.diff(bt)
+        return float(np.median(gaps))
+
     def beat_to_time(self, beat: float) -> float:
         """Inverse of time_to_beat: audio timestamp of a fractional beat."""
         bt = self.beat_times
@@ -42,7 +57,7 @@ class TempoMap:
             return bt[0] * (beat / self.pickup_beats) if self.pickup_beats else 0.0
         idx = beat - self.pickup_beats
         if idx > len(bt) - 1 and len(bt) >= 2:
-            step = bt[-1] - bt[-2]
+            step = self._tail_step()
             if step > 0:
                 return float(bt[-1] + (idx - (len(bt) - 1)) * step)
         return float(np.interp(idx, np.arange(len(bt)), bt))
@@ -59,7 +74,7 @@ class TempoMap:
             # outro quantized onto one tick and the chart simply stopped.
             # Measured: charts ended up to 25s early, at exactly the last
             # detected beat, on both engines. Carry the final tempo forward.
-            step = bt[-1] - bt[-2]
+            step = self._tail_step()
             if step > 0:
                 return (len(bt) - 1) + (t - bt[-1]) / step + self.pickup_beats
         # np.interp handles tempo drift by interpolating between real beats

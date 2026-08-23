@@ -271,6 +271,16 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             progress(f"      chords: {before} -> {after} positions "
                      f"(human charts use 5-13% on EDM)")
 
+    # Nothing may be charted past the end of the audio: a note there is
+    # simply unhittable. Cheap insurance against any tempo-map drift in an
+    # outro, which is exactly where beat detection is least reliable.
+    end_of_audio = int(tempo.time_to_beat(duration_s) * res)
+    trimmed = [n for n in expert if n[0] <= end_of_audio]
+    if len(trimmed) < len(expert):
+        progress(f"      trimmed {len(expert) - len(trimmed)} note(s) past the "
+                 f"end of the audio")
+        expert = trimmed
+
     if not getattr(opts, "no_playability", False):
         from . import playability
 

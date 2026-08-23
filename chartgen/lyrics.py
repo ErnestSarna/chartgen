@@ -230,8 +230,34 @@ def transcribe(audio_path: str, tempo, progress=lambda m: None) -> list[tuple[in
     return events
 
 
+# Share of synced lines that must land on audible audio. A sheet timed
+# against a different edit — a YouTube rip with an added intro, a radio cut —
+# can still match on duration, and would then sit wrong for the whole song.
+# Checking that the words land where there is sound catches that; it is a
+# gross-misalignment test, not a precision one, hence the generous bar.
+MIN_LINES_ON_SOUND = 0.7
+
+
+def _lands_on_sound(lines, y, sr) -> bool:
+    """Do the synced lines fall where the recording actually plays?"""
+    import numpy as np
+
+    if y is None or not len(y):
+        return True
+    frame = max(1, int(0.25 * sr))
+    loud = float(np.percentile(np.abs(y), 95)) or 1.0
+    hits = 0
+    for when, _ in lines:
+        at = int(when * sr)
+        chunk = y[max(0, at - frame):at + frame]
+        if len(chunk) and float(np.abs(chunk).mean()) > 0.05 * loud:
+            hits += 1
+    return hits >= MIN_LINES_ON_SOUND * len(lines)
+
+
 def collect(audio_path, tempo, artist: str, title: str, duration_s: float,
-            source: str = "auto", progress=lambda m: None) -> list[tuple[int, str]]:
+            source: str = "auto", progress=lambda m: None,
+            y=None, sr=None) -> list[tuple[int, str]]:
     """Lyric events from the best source available.
 
     'auto' looks the song up on LRCLIB and only transcribes if that misses;
@@ -241,6 +267,10 @@ def collect(audio_path, tempo, artist: str, title: str, duration_s: float,
         from . import lrclib
 
         lines = lrclib.find(artist, title, duration_s, progress=progress)
+        if lines and not _lands_on_sound(lines, y, sr):
+            progress("      the synced lyrics do not line up with this audio; "
+                     "transcribing instead")
+            lines = None
         if lines:
             events = from_lines(lines, tempo, duration_s)
             progress(f"      {sum(1 for _, e in events if e.startswith('lyric '))}"

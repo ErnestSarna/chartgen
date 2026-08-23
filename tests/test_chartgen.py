@@ -1247,6 +1247,23 @@ def test_same_tick_lyrics_keep_their_written_order():
     assert written == ["phrase_start"] + [f"lyric {w}" for w in words] + ["phrase_end"],         written
 
 
+def test_synced_lyrics_are_rejected_when_they_miss_the_audio():
+    from chartgen.lyrics import _lands_on_sound
+
+    sr = 22050
+    # A song that is silent for its first half: a lyric sheet timed against a
+    # different edit (a YouTube rip with an added intro matches on duration
+    # but not on where the words land) puts every line in the silence.
+    quiet = np.zeros(30 * sr, dtype=np.float32)
+    tone = 0.5 * np.sin(2 * np.pi * 440 * np.arange(30 * sr) / sr)
+    y = np.concatenate([quiet, tone]).astype(np.float32)
+
+    assert not _lands_on_sound([(t, "x") for t in range(2, 28, 2)], y, sr)
+    assert _lands_on_sound([(t, "x") for t in range(32, 58, 2)], y, sr)
+    # With no audio to check against, the sheet is taken at its word.
+    assert _lands_on_sound([(2.0, "x")], None, None)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

@@ -384,16 +384,24 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     )
     lyric_events = ()
     if getattr(opts, "lyrics", True):
-        progress("      transcribing vocals for lyrics")
+        progress("      looking up lyrics")
         try:
             from . import lyrics as lyricsmod
 
-            lyric_events = lyricsmod.transcribe(str(audio), tempo, progress)
+            lyric_events = lyricsmod.collect(
+                str(audio), tempo, opts.artist,
+                # The [chartgen] tag is ours; a lyrics database has never
+                # heard of it.
+                opts.name or audio.stem, duration_s,
+                getattr(opts, "lyric_source", "auto"), progress, y, sr)
         except Exception as error:  # lyrics are a nice-to-have, never fatal
             progress(f"      lyrics skipped: {type(error).__name__}: {error}")
-    solo_phrases = () if getattr(opts, "no_solos", False) else expression.solos(
-        expert, list(events), list(lyric_events), res
-    )
+    solo_phrases = ()
+    if not getattr(opts, "no_solos", False):
+        from . import solo as solomod
+
+        solo_phrases = solomod.detect(expert, list(events), list(lyric_events),
+                                      y, sr, tempo, progress)
     progress(f"      {len(star_power)} star power phrase(s), {len(events)} section(s), "
              f"{len(solo_phrases)} solo(s), HOPOs {'on' if opts.hopos else 'off'}")
     check()

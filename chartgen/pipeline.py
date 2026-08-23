@@ -123,7 +123,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
              f"{len(tempo.sync_track())} tempo event(s)")
     check()
 
-    engine = getattr(opts, "engine", "audio2chart")
+    engine = getattr(opts, "engine", "basicpitch")
     if engine == "basicpitch":
         from . import transcribe
 
@@ -186,6 +186,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
     reverse_map = SimpleTokenizerGuitar().reverse_map
     seed = getattr(opts, "seed", None)
     expert, best = None, -1.0
+    best_key = (False, -1.0)
     for attempt in range(1, opts.attempts + 1):
         check()
         if seed is not None:
@@ -222,12 +223,19 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                          "using model frets for this song")
                 candidate = raw
         # Both matter: variety alone passed a chart that just walked the
-        # fretboard, so score on the weaker of the two.
-        score = min(quality.variety_score(candidate), quality.walk_score(candidate))
-        progress(f"      attempt {attempt}/{opts.attempts}: {quality.describe(candidate)}")
-        if score > best:
-            expert, best = candidate, score
-        if score >= opts.min_variety:
+        # fretboard, so score on the weaker of the two. That pair is a FLOOR,
+        # though — it cannot tell whether a roll caught the actual part.
+        gate = min(quality.variety_score(candidate), quality.walk_score(candidate))
+        fidelity = density.onset_fidelity(candidate, y, sr, tempo)
+        progress(f"      attempt {attempt}/{opts.attempts}: "
+                 f"{quality.describe(candidate)}  onset-F1 {fidelity:.2f}")
+        # Sampling makes this engine high-variance — playtested as "bigger
+        # wins but bigger losses". Rank rolls by how well they match the audio,
+        # preferring any roll that clears the floor over one that does not.
+        key = (gate >= opts.min_variety, fidelity)
+        if key > best_key:
+            expert, best, best_key = candidate, gate, key
+        if key[0] and fidelity >= getattr(opts, "min_fidelity", 0.60):
             break
     if best < opts.min_variety:
         progress(f"      warning: best score {best:.2f} is below {opts.min_variety:.2f}; "

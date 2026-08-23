@@ -22,11 +22,17 @@ def build_args(argv):
                          "With several inputs, artist/title come from tags or "
                          "video titles per song")
     ap.add_argument("-o", "--outdir", type=Path, default=Path("out"))
-    ap.add_argument("--engine", choices=("audio2chart", "basicpitch"),
-                    default="audio2chart",
-                    help="Expert-note source: audio2chart = the neural charter "
-                         "(current champion); basicpitch = Apache-licensed "
-                         "transcription (the distributable rework, in A/B)")
+    ap.add_argument("--engine", choices=("basicpitch", "audio2chart"),
+                    default="basicpitch",
+                    help="Expert-note source. basicpitch (default): Apache-"
+                         "licensed transcription — deterministic and "
+                         "consistent. audio2chart: the neural charter, which "
+                         "samples, so it lands bigger wins AND bigger losses; "
+                         "--attempts rolls it several times and keeps the roll "
+                         "that best matches the audio")
+    ap.add_argument("--min-fidelity", type=float, default=0.60, metavar="F1",
+                    help="stop rolling the neural engine once a roll matches "
+                         "the audio this well (human charts median 0.57)")
     ap.add_argument("--model", default="3podi/charter-v1.0-40-M-best-acc",
                     help="audio2chart checkpoint: hub repo id or a local "
                          "export folder from tools/finetune.py "

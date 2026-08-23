@@ -85,3 +85,44 @@ def gate_by_onsets(notes, y, sr, tempo, threshold: float = 0.25):
         keep.discard(tick)
 
     return [n for n in notes if n[0] in keep]
+
+
+def onset_fidelity(notes, y, sr, tempo, tolerance_s: float = 0.07) -> float:
+    """How well the chart's notes line up with what the audio actually plays.
+
+    Playtest of the two engines: the neural model "does some things better,
+    but also worse — bigger wins and bigger losses", while transcription is
+    more consistent. That variance is a SELECTION problem, since the neural
+    engine samples and can be rolled several times. What the existing gates
+    could not measure is whether a roll actually caught the part, and this
+    can: F1 between the chart's note positions and the audio's detected
+    onsets. Precision falls when a roll invents notes, recall when it misses
+    the part — the two failure modes of a bad roll.
+    """
+    import librosa
+
+    if not notes:
+        return 0.0
+    res = tempo.resolution
+    chart = sorted({tempo.beat_to_time(t / res) for t, _, _ in notes})
+    peaks = librosa.onset.onset_detect(y=y, sr=sr, units="time")
+    if len(peaks) == 0:
+        return 0.0
+
+    peaks = np.asarray(peaks, dtype=float)
+    chart_arr = np.asarray(chart, dtype=float)
+
+    def covered(a, b):
+        """Share of `a` with a partner in `b` inside the tolerance."""
+        idx = np.searchsorted(b, a)
+        best = np.full(len(a), np.inf)
+        for shift in (-1, 0):
+            probe = np.clip(idx + shift, 0, len(b) - 1)
+            best = np.minimum(best, np.abs(b[probe] - a))
+        return float(np.mean(best <= tolerance_s))
+
+    precision = covered(chart_arr, peaks)
+    recall = covered(peaks, chart_arr)
+    if precision + recall == 0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)

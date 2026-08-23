@@ -26,6 +26,13 @@ MODELS = {
     "Fast (S, ~25M params)": "3podi/charter-v1.0-40-S-best-acc",
 }
 GRIDS = {"16th notes (default)": 4, "8th notes (sparser)": 2, "Triplet 8ths": 3}
+# Named from the playtest verdict rather than the implementation: the neural
+# model samples, so it "does some things better and some worse — bigger wins
+# but bigger losses", while transcription is deterministic and steadier.
+ENGINES = {
+    "Transcription — steady (default)": "basicpitch",
+    "Neural model — bigger highs and lows": "audio2chart",
+}
 FRET_MODES = {
     "Follow the melody (pitch)": "pitch",
     "Raw model output": "model",
@@ -118,10 +125,10 @@ class App:
         for col in (1, 3):
             frame.columnconfigure(col, weight=1)
 
-        self.model = tk.StringVar(value=saved.get("model", list(MODELS)[0]))
-        ttk.Label(frame, text="Model").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(frame, textvariable=self.model, values=list(MODELS),
-                     state="readonly", width=26).grid(row=0, column=1, sticky="w", padx=6)
+        self.engine = tk.StringVar(value=saved.get("engine", list(ENGINES)[0]))
+        ttk.Label(frame, text="Note source").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(frame, textvariable=self.engine, values=list(ENGINES),
+                     state="readonly", width=32).grid(row=0, column=1, sticky="w", padx=6)
 
         self.grid_choice = tk.StringVar(value=saved.get("grid", list(GRIDS)[0]))
         ttk.Label(frame, text="Note grid").grid(row=0, column=2, sticky="w")
@@ -152,8 +159,17 @@ class App:
                     textvariable=self.sustain_gap).grid(row=2, column=1, sticky="w",
                                                         padx=6, pady=(6, 0))
 
+        self.model = tk.StringVar(value=saved.get("model", list(MODELS)[0]))
+        ttk.Label(frame, text="Neural checkpoint").grid(row=3, column=0, sticky="w",
+                                                       pady=(6, 0))
+        ttk.Combobox(frame, textvariable=self.model, values=list(MODELS),
+                     state="readonly", width=26).grid(row=3, column=1, sticky="w",
+                                                      padx=6, pady=(6, 0))
+        ttk.Label(frame, text="(only used by the neural source)",
+                  foreground="#666").grid(row=3, column=2, columnspan=2, sticky="w")
+
         toggles = ttk.Frame(frame)
-        toggles.grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        toggles.grid(row=4, column=0, columnspan=4, sticky="w", pady=(8, 0))
         self.sustains = tk.BooleanVar(value=saved.get("sustains", True))
         self.star_power = tk.BooleanVar(value=saved.get("star_power", True))
         self.sections = tk.BooleanVar(value=saved.get("sections", True))
@@ -261,6 +277,8 @@ class App:
             min_variety=0.80, min_sustain_gap=float(self.sustain_gap.get()),
             hopos=self.hopos.get(), no_star_power=not self.star_power.get(),
             no_sections=not self.sections.get(), no_sustains=not self.sustains.get(),
+            engine=ENGINES.get(self.engine.get(), "basicpitch"),
+            min_fidelity=0.60,
             fret_mode=FRET_MODES.get(self.fret_mode.get(), "pitch"),
             target_diff=(None if self.target_diff.get() == "Auto"
                          else int(self.target_diff.get())),
@@ -434,6 +452,7 @@ class App:
             "star_power": self.star_power.get(), "sections": self.sections.get(),
             "hopos": self.hopos.get(), "fret_mode": self.fret_mode.get(),
             "target_diff": self.target_diff.get(), "lyrics": self.lyrics.get(),
+            "engine": self.engine.get(),
         }
 
     def _on_close(self):

@@ -248,7 +248,11 @@ def enforce_chord_rules(tiers: dict[str, list[Note]]) -> dict[str, list[Note]]:
 # local library that carry a full four-tier ladder. Grid rules alone drifted
 # well off these (Hard landed at 96% of Expert on one song), so the ratios are
 # enforced as a cap rather than hoped for.
-TIER_RATIO = {"HardSingle": 0.78, "MediumSingle": 0.55, "EasySingle": 0.39}
+# Median position counts vs Expert across 800 genre-balanced full-ladder
+# charts (2026-08-24 calibration set). The original 49-chart numbers
+# (.78/.55/.39) were within a few points - one of the few thresholds the
+# bigger data validated rather than overturned.
+TIER_RATIO = {"HardSingle": 0.81, "MediumSingle": 0.58, "EasySingle": 0.41}
 
 
 def _thin_to_ratio(ticks: list[int], resolution: int, target: int) -> list[int]:

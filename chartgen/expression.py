@@ -174,9 +174,13 @@ def sections(y, sr, tempo, beats_per_bar: int = 4) -> list[tuple[int, str]]:
 # Note it RISES as tiers get easier: fewer notes, so each is held longer.
 # Propagating Expert's sustains downward unchanged left every tier flat at
 # Expert's rate, which is why our Easy felt clipped next to a real one.
+# Median share of positions carrying a sustain, per tier, across 800
+# genre-balanced full-ladder charts (2026-08-24). Scale raised every tier
+# from the 49-chart numbers (8.7/11.1/14.9/15.3%), Easy most of all -
+# sparse tiers lean on held notes to stay musical.
 TIER_SUSTAIN_SHARE = {
-    "ExpertSingle": 0.087, "HardSingle": 0.111,
-    "MediumSingle": 0.149, "EasySingle": 0.153,
+    "ExpertSingle": 0.116, "HardSingle": 0.146,
+    "MediumSingle": 0.170, "EasySingle": 0.222,
 }
 
 

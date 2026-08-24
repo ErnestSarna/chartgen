@@ -113,7 +113,7 @@ def smooth_fret_jumps(notes, tempo, max_step: int = 2,
     """Cap how far the hand travels between consecutive positions.
 
     Measured against human charts of the same songs, they jump three or more
-    lanes on 0-1% of consecutive single notes; ours did it 9-30% of the time
+    lanes on 0-1% of consecutive single notes in the LOCAL library; ours did it 9-30% of the time. (The 800-chart genre-balanced set later measured a 6.3% median - rock/metal charts jump far more than EDM - but the clamp stays: the playtests that approved this feel are the target, and it can be relaxed per-run with --max-fret-jump.)
     and made the full green-to-orange stretch on up to 8% (humans: 0.3%).
     That is the audible half of "follow whatever instrument is loudest" — the
     register flips mid-phrase and the hand teleports across the neck.
@@ -163,7 +163,7 @@ def step_share(notes, threshold: int = 3) -> float:
 
     The measurement that exposed the teleporting problem, kept in the codebase
     so the pipeline can report the improvement it makes rather than claiming
-    one. Human charts sit at 0-1% for threshold 3.
+    one. EDM-style charts sit at 0-1% for threshold 3; the genre-balanced median is 6.3%.
     """
     by_tick: dict[int, list[int]] = {}
     for tick, lane, _ in notes:

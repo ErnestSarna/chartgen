@@ -697,7 +697,9 @@ def test_star_power_avoids_the_unspendable_ending():
     last_note = max(t for t, _, _ in notes)
     for start, length in phrases:
         assert start <= last_note - 8 * bar, f"phrase at {start} is too late"
-        assert length == bar, "phrases should be one measure"
+        # Two bars: the measured human median is 8 beats, twice the RBN
+        # spec's one measure.
+        assert length == 2 * bar, "phrases should be two measures"
 
 
 def test_reduce_keeps_syncopation():

@@ -253,6 +253,13 @@ def enforce_chord_rules(tiers: dict[str, list[Note]]) -> dict[str, list[Note]]:
 # (.78/.55/.39) were within a few points - one of the few thresholds the
 # bigger data validated rather than overturned.
 TIER_RATIO = {"HardSingle": 0.81, "MediumSingle": 0.58, "EasySingle": 0.41}
+# Anti-spike floor: no tier may fall below this share of the tier above it.
+# Measured on the same 800 charts, the steepest adjacent step humans take is
+# p10 = 0.53 (Easy/Medium); three unrelated ecosystems (Rocksmith's DDC
+# tool, osu!mania's per-tier caps, BandFuse's reviews) independently name
+# tier-to-tier difficulty cliffs as the failure players actually notice,
+# separately from each tier's absolute density.
+MIN_ADJACENT_RATIO = 0.53
 
 
 def _thin_to_ratio(ticks: list[int], resolution: int, target: int) -> list[int]:
@@ -305,6 +312,10 @@ def derive_tiers(expert: list[Note], resolution: int,
     for name in ("HardSingle", "MediumSingle", "EasySingle"):
         notes = tiers[name]
         target = max(1, min(int(expert_positions * TIER_RATIO[name]), previous - 1))
+        # The ratio targets are Expert-relative; when something upstream has
+        # shrunk a middle tier (a --target-diff pass, NPS caps), the next
+        # tier's Expert-relative target can open a cliff. Clamp the step.
+        target = min(max(target, int(MIN_ADJACENT_RATIO * previous)), max(1, previous - 1))
         kept = set(_thin_to_ratio(sorted(_by_tick(notes)), resolution, target))
         out[name] = [n for n in notes if n[0] in kept]
         previous = len(kept)

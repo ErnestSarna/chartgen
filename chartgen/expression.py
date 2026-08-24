@@ -97,23 +97,28 @@ def star_power_phrases(
     resolution: int,
     duration_s: float,
     beats_per_bar: int = 4,
-    phrase_bars: int = 1,
-    min_gap_bars: int = 6,
+    phrase_bars: int = 2,
+    min_gap_bars: int = 8,
     min_notes: int = 4,
-    beats_per_phrase: int = 40,
+    beats_per_phrase: int = 50,
     end_guard_bars: int = 8,
 ) -> list[tuple[int, int]]:
     """Pick bar-aligned [(start_tick, length_ticks)] star power phrases.
 
-    Frequency and length follow the RBN/C3 authoring guideline rather than a
-    guess: one phrase per 40 beats (= one per 10 measures in 4/4), each one
-    measure long. Counting beats rather than seconds matters — the old
-    one-per-25s rule under-filled slow songs and over-filled fast ones.
+    Frequency and length track what charters measurably do, cross-checked
+    against the RBN/C3 spec. Measured on 800 full-ladder community charts:
+    phrase length median 8 beats (two bars — twice the RBN spec's one),
+    starts 44 beats apart (RBN: 40), 0.79 phrases per 40 beats (RBN: 1.0),
+    and a median 48 beats left clear after the last phrase. The constants
+    sit on the community medians; RBN and YARG arriving at ~40-beat spacing
+    independently makes the neighbourhood trustworthy. Counting beats
+    rather than seconds matters — the old one-per-25s rule under-filled
+    slow songs and over-filled fast ones.
 
-    Nothing is placed in the last 8 measures: Clone Hero needs half a meter
-    (two phrases) to activate at all, so late star power is meter the player
-    can never spend. Within those rules phrases go on the densest bars, spaced
-    out so activations spread across the song instead of bunching.
+    Nothing is placed in the last 8 measures (human p10 is ~7): Clone Hero
+    needs half a meter (two phrases) to activate at all, so late star power
+    is meter the player can never spend. Within those rules phrases go on
+    the densest bars, spaced out so activations spread across the song.
     """
     bar = beats_per_bar * resolution
     ticks = sorted(t for t, _, _ in notes)

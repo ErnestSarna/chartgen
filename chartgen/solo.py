@@ -31,18 +31,20 @@ what 70% of human charts do anyway.
 """
 import numpy as np
 
-# Every constant below came out of tools/sweep_solos.py run against 60
-# library songs (40 with human solo markers, 48 solos), with a hit defined
-# as IoU >= 0.25 against the human marker — the first sweep scored ANY
-# overlap as a hit and flattered itself with markers that grazed the real
-# solo by a boundary tick. Under the honest criterion the chosen rule
-# scores 100% precision / 10% recall on the full set AND on every one of
-# ten random half-splits, with all 20 solo-less songs left unmarked. Low
-# recall is the accepted price — a marker over a verse reads as plainly
-# wrong, while a missing one merely costs a bonus. What it does catch are
-# the textbook cases (measured: Run Boy Run at IoU 0.99, Mary Jane's Last
-# Dance, River of Darkness); what it misses are solos that do not stand out
-# from their own song on any signal short of instrument recognition.
+# Every constant below came out of tools/sweep_solos.py, hits IoU-gated at
+# >= 0.25 against the human marker. Recalibrated 2026-08-24 against 359
+# songs / 492 human solos from the genre-balanced Chorus Encore pull —
+# and scale changed the answer: brightness, the winning feature on the
+# 60-song local library (100% precision there), collapsed on diverse data
+# and earns NO weight. What survives across genres is melodic movement
+# (spread) and non-repetition (novelty), with the lead-line share as a
+# half-weight assist. The recalibrated rule scores ~75% precision at ~5%
+# recall across ten half-splits (58-100% band) with 20/20 solo-less songs
+# left unmarked — beating the library-tuned rule on BOTH axes at scale
+# (64%/3%). Low recall is still the accepted price, and the binding
+# constraint is candidate generation: chroma-section boundaries reach the
+# broader corpus's solos at a median IoU of only 0.34, so better
+# segmentation, not scoring, is where recall lives.
 
 # Length. The human library's lower quartile is 47 beats; the sweep pushed
 # the floor there and no lower — every shorter floor it was offered let
@@ -66,17 +68,16 @@ HOP = 1024
 # overlap with real human solos from 0.50 to 0.64 without loosening any
 # boundary.
 MAX_RUN = 3
-# The winning combination is a CONJUNCTION in disguise: brightness carries
-# the most weight, but a candidate cannot clear the bar on brightness alone
-# — it must also read as a foreground lead line (voiced) that moves like a
-# melody (spread) and appears nowhere else in the song (novelty).
-# Bright-only scored ~52% precision under the honest IoU criterion and
-# swung wildly between half-splits; requiring all four held 100% on every
-# split. confidence earned no weight — whatever it knows, voiced already
-# knows.
+# What a solo is, per 359 genre-diverse songs: a passage whose melody
+# MOVES (spread) and appears NOWHERE ELSE in the song (novelty), with a
+# clear lead line (voiced) as supporting evidence. Brightness is zeroed on
+# purpose — dominant on the local library, it inverted into noise on the
+# genre-balanced corpus, the clearest case yet of a threshold that would
+# have silently encoded one library's mixing style. confidence stays at
+# zero — whatever it knows, voiced already knows.
 FEATURES = ("voiced", "confidence", "spread", "bright", "novelty")
-WEIGHTS = {"voiced": 0.5, "confidence": 0.0, "spread": 0.5,
-           "bright": 1.0, "novelty": 0.5}
+WEIGHTS = {"voiced": 0.5, "confidence": 0.0, "spread": 1.0,
+           "bright": 0.0, "novelty": 1.0}
 MIN_Z = 1.25  # 0.5 standard deviations x the total weight of 2.5
 MAX_SOLOS = 2           # human median is 1, max 3
 

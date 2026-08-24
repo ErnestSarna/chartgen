@@ -39,7 +39,7 @@ def run(label: str, argv: list, log_name: str) -> int:
     return code
 
 
-def run_pair(label: str, script: str, out_stem: str, total: int, extra: list) -> None:
+def run_pair(label: str, script: str, out_stem: str, total: int, extra: list = ()) -> None:
     """Two worker processes over a --start/--end split of the same tool."""
     half = total // 2
     procs = []

@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from study_solos import blocks, RES_RE
+from study_solos import is_generated, blocks, RES_RE
 from study_tap_timbre import NOTE_RE, SYNC_RE, TAP, OPEN, tick_to_time
 from validate_solos import find_audio
 
@@ -86,6 +86,8 @@ def main(argv=None):
         if not audio:
             continue
         b = blocks(chart.read_text(encoding="utf-8", errors="ignore"))
+        if is_generated(b):
+            continue
         lanes = [int(l) for _, l, _ in NOTE_RE.findall(b.get("ExpertSingle", ""))]
         if sum(1 for l in lanes if l == TAP) >= 24:
             charts.append((chart, audio))

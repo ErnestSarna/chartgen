@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from study_solos import blocks, solo_spans, RES_RE, NOTE_RE, OPEN
+from study_solos import is_generated, blocks, solo_spans, RES_RE, NOTE_RE, OPEN
 from validate_solos import find_audio
 
 
@@ -45,7 +45,7 @@ def main(argv=None):
         if not audio:
             continue
         b = blocks(chart.read_text(encoding="utf-8", errors="ignore"))
-        if "ExpertSingle" not in b:
+        if "ExpertSingle" not in b or is_generated(b):
             continue
         candidates.append((chart, audio, solo_spans(b["ExpertSingle"])))
 

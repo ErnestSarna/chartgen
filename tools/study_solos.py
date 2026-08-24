@@ -40,6 +40,18 @@ def blocks(text: str) -> dict[str, str]:
     return out
 
 
+def is_generated(blocks_dict: dict) -> bool:
+    """True when this chart was written by chartgen itself.
+
+    Folder-name tagging came late; the Charter field was always signed.
+    Ground truth polluted by our own old detector is how Run Boy Run's
+    machine-made solo marker spent a day masquerading as the calibration
+    suite's best human-validated catch.
+    """
+    song = blocks_dict.get("Song", "")
+    return "chartgen" in song.lower()
+
+
 def solo_spans(body: str) -> list[tuple[int, int]]:
     """[(start, end)] from the local `E solo` / `E soloend` track events."""
     spans, open_at = [], None

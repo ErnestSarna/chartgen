@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from study_solos import blocks, solo_spans, RES_RE, NOTE_RE, OPEN
+from study_solos import is_generated, blocks, solo_spans, RES_RE, NOTE_RE, OPEN
 
 AUDIO = ("song.ogg", "song.opus", "song.mp3", "guitar.ogg", "song.wav")
 
@@ -63,6 +63,8 @@ def main(argv=None):
         expert = b.get("ExpertSingle", "")
         spans = solo_spans(expert)
         audio = find_audio(chart.parent)
+        if is_generated(b):
+            continue
         if audio and expert:
             rows.append((chart, audio, spans))
 

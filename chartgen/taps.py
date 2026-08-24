@@ -1,13 +1,13 @@
 """Mark soft passages as tap notes. Experimental, off by default.
 
 No charting standard documents when to tap (YARG: "use them sensibly", and
-nothing else anywhere), and measurement shows the community has no single
-rule either: against 24 human charts, tapped notes carry the same attack as
-strummed ones (median -0.09z, a coin flip) but lean darker in timbre 2:1
-(median -0.48z). So this implements a chosen philosophy rather than a
-mimicked one: taps mark SOFT sounds - the piano lines, plucks and gentle
-synth runs where a strum is the wrong physical gesture - scored on both the
-user's axis (attack) and the community's measurable lean (darkness).
+nothing else anywhere), and measurement settled that the community has no
+rule at all: on 232 genre-balanced charts (76k tapped positions, 34% base
+rate) the best acoustic predictor of human taps reaches 39-42% precision -
+barely above chance. Human taps are charter style, not acoustics. So this
+implements a chosen philosophy rather than a mimicked one: taps mark SOFT
+sounds - the piano lines, plucks and gentle synth runs where a strum is
+the wrong physical gesture.
 
 Because it is a philosophy and not a measured consensus, the feature ships
 off by default; the constants are still swept against the human tap
@@ -21,15 +21,14 @@ it plays without strumming and overrides HOPO state.
 """
 import numpy as np
 
-# Softness blend, swept against 24 human charts (9,047 tapped positions,
-# a 33% base rate) in tools/sweep_taps.py. Darkness does the work: the
-# best configs all put brightness first and the sweep gave loudness
-# nothing. Attack keeps half weight - it is the philosophy's own axis and
-# costs no agreement to keep (54% either way). The chosen config agrees
-# with human taps 54% of the time at 38% recall, a 1.6x lift over the base
-# rate; that is the honest ceiling for a rule the community itself only
-# half-follows, and why the feature is off by default.
-WEIGHTS = {"attack": 0.5, "bright": 1.0, "loud": 0.0}
+# Softness blend. The 24-song library sweep favoured brightness; the
+# 232-song genre-balanced re-sweep flipped it - attack edges out
+# brightness at scale (42% vs 40% precision over a 34% base rate) and the
+# two libraries disagreeing is itself the finding: no acoustic axis
+# predicts human taps reliably, so the weights follow the PHILOSOPHY.
+# Attack leads because "soft sounds" means soft attacks; darkness stays as
+# a half-weight tiebreak; loudness earned nothing anywhere.
+WEIGHTS = {"attack": 1.0, "bright": 0.5, "loud": 0.0}
 # How soft, in per-song standard deviations, a note must be to join a
 # tapped phrase. Mild on purpose: the phrase requirement below does the
 # filtering that a harsher note-level bar would do worse.

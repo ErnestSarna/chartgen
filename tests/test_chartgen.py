@@ -766,47 +766,6 @@ def test_density_gate_never_eats_the_fade_out_tail():
         f"tail retreated {(last_orig - last_kept) / res:.1f} beats"
 
 
-def test_solo_detection_needs_vocals_elsewhere_and_busy_break():
-    from chartgen.expression import solos
-
-    res = RESOLUTION
-    bar = 4 * res
-    # 24 bars: vocals in bars 0-8 and 16-24, an instrumental burst in 8-16.
-    expert = []
-    for barn in range(24):
-        step = res // 4 if 8 <= barn < 16 else res  # 16ths in the break
-        ticks = range(barn * bar, (barn + 1) * bar, step)
-        expert += [(t, (t // step) % 5, 0) for t in ticks]
-    section_marks = [(0, "Section 1"), (8 * bar, "Section 2"), (16 * bar, "Section 3")]
-    lyric_events = []
-    for barn in list(range(8)) + list(range(16, 24)):
-        for k in range(4):
-            lyric_events.append((barn * bar + k * res, f"lyric la{k}"))
-
-    found = solos(expert, section_marks, lyric_events, res)
-    assert len(found) == 1, found
-    start, end = found[0]
-    assert 8 * bar <= start < 9 * bar and 15 * bar < end <= 16 * bar + 1, found
-
-    # No lyrics at all (instrumental song): no solos, by design.
-    assert solos(expert, section_marks, [], res) == []
-    # Vocals everywhere: no instrumental break, no solo.
-    everywhere = [(barn * bar, "lyric x") for barn in range(24)]
-    assert solos(expert, section_marks, everywhere, res) == []
-
-    # Playtested bug: an instrumental OUTRO is a fade-out, not a solo — no
-    # vocals ever come after it. Same for an instrumental intro.
-    outro_words = [(barn * bar + k * res, f"lyric la{k}")
-                   for barn in range(16) for k in range(4)]
-    assert solos(expert, section_marks, outro_words, res) == [], \
-        "instrumental outro must not become a solo"
-    intro_words = [(barn * bar + k * res, f"lyric la{k}")
-                   for barn in range(8, 24) for k in range(4)]
-    found = solos(expert, [(0, "S1"), (8 * bar, "S2"), (16 * bar, "S3")],
-                  intro_words, res)
-    assert all(s >= 8 * bar for s, _ in found), "intro must not become a solo"
-
-
 def test_tier_block_writes_solo_markers_only_where_notes_exist():
     from chartgen.chart import _tier_block
 
@@ -1262,6 +1221,47 @@ def test_synced_lyrics_are_rejected_when_they_miss_the_audio():
     assert _lands_on_sound([(t, "x") for t in range(32, 58, 2)], y, sr)
     # With no audio to check against, the sheet is taken at its word.
     assert _lands_on_sound([(2.0, "x")], None, None)
+
+
+def test_solo_scoring_rewards_the_standout_and_stays_quiet_otherwise():
+    """The audio detector's scoring, on synthetic evidence.
+
+    The full detector needs audio; the decision logic does not. A section
+    that is brighter, more voiced AND more novel than the rest of its song
+    must clear the swept threshold, and a song whose sections all look alike
+    must produce nothing - 70% of human charts mark no solo, so silence is
+    the default being protected here.
+    """
+    from chartgen import solo
+
+    def rows(standout=None):
+        out = []
+        for i in range(8):
+            hot = i == standout
+            out.append({
+                "voiced": 0.55 if hot else 0.25,
+                "confidence": 0.4,
+                "spread": 1.2,
+                "bright": 1400.0 if hot else 950.0,
+                "novelty": 0.55 if hot else 0.18,
+            })
+        return out
+
+    spans = [(i * 16 * 480, (i + 1) * 16 * 480) for i in range(8)]
+
+    z = solo._zscores(rows(standout=5))
+    cands = solo._candidates(spans, z, 480)
+    scores = {(a, b): sum(solo.WEIGHTS[k] * zz[k] for k in solo.FEATURES)
+              for a, b, zz in cands}
+    hot_span = spans[5]
+    assert scores[hot_span] >= solo.MIN_Z, scores[hot_span]
+    assert scores[hot_span] == max(scores.values())
+
+    # A flat song: nothing may clear the bar.
+    z = solo._zscores(rows(standout=None))
+    cands = solo._candidates(spans, z, 480)
+    assert all(sum(solo.WEIGHTS[k] * zz[k] for k in solo.FEATURES) < solo.MIN_Z
+               for _, _, zz in cands)
 
 
 if __name__ == "__main__":

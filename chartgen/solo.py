@@ -1,0 +1,273 @@
+"""Find the guitar solo by listening for one, not by waiting for a lyric gap.
+
+The old rule marked any chroma section with no transcribed words that played
+busier than average. Measured against 141 human charts, every assumption in
+it is wrong:
+
+- only 30% of songs carry a solo at all, so marking one is the exception;
+- a lyric-free gap of two bars or more contains a solo 18% of the time —
+  intros, bridges, breakdowns and outros all look identical under "nobody is
+  singing";
+- solos are not reliably busier. Median density is 1.20x the song average but
+  the lower quartile is 0.89x, so a >=1.2x gate throws away half of them;
+- they are long: median 64 beats, about 16 bars.
+
+A sweep over 508 lyric-free gaps found no combination of chart-only features
+above ~20% precision, which settles where the missing signal has to come
+from. Pati & Lerch (AES 2017, "A Dataset and Method for Electric Guitar Solo
+Detection in Rock Music") define a solo as a lead voice in the FOREGROUND,
+playing phrases that DO NOT REPEAT, for longer than two measures — and their
+classifier reaches 63% precision from three feature groups: spectral
+baseline, predominant pitch with its confidence, and structural repetition.
+
+That is the shape copied here, minus the SVM (no training data) and minus
+Melodia (Essentia ships no Windows wheels). librosa's pyin gives the pitch
+track and its voiced probability; the chroma sections the pipeline already
+computes give the repetition feature. Since even a purpose-built classifier
+tops out near 63% precision, this is deliberately biased toward silence: a
+section has to look like a solo on several independent counts before it is
+marked, and songs with nothing convincing get no marker at all — which is
+what 70% of human charts do anyway.
+"""
+import numpy as np
+
+# Every constant below came out of tools/sweep_solos.py run against 60
+# library songs (40 with human solo markers, 48 solos), with a hit defined
+# as IoU >= 0.25 against the human marker — the first sweep scored ANY
+# overlap as a hit and flattered itself with markers that grazed the real
+# solo by a boundary tick. Under the honest criterion the chosen rule
+# scores 100% precision / 10% recall on the full set AND on every one of
+# ten random half-splits, with all 20 solo-less songs left unmarked. Low
+# recall is the accepted price — a marker over a verse reads as plainly
+# wrong, while a missing one merely costs a bonus. What it does catch are
+# the textbook cases (measured: Run Boy Run at IoU 0.99, Mary Jane's Last
+# Dance, River of Darkness); what it misses are solos that do not stand out
+# from their own song on any signal short of instrument recognition.
+
+# Length. The human library's lower quartile is 47 beats; the sweep pushed
+# the floor there and no lower — every shorter floor it was offered let
+# grazing false positives in.
+MIN_BEATS = 48.0
+MAX_BEATS = 128.0
+# Position. Library p25/p75 is 0.49-0.76 of the way through; the sweep chose
+# nearly that exact band over wider ones.
+MIN_POS, MAX_POS = 0.45, 0.80
+# A stray misheard word should not veto a real solo (32% of human solos have
+# a word inside), but singing through it should.
+MAX_WORDS = 2
+# Lead register: above the bass and the body of a male vocal, low enough to
+# keep a guitar's middle octaves.
+FMIN_HZ, FMAX_HZ = 180.0, 1400.0
+HOP = 1024
+
+# A solo can straddle two chroma segments — the segmenter splits on harmonic
+# change, and a solo that moves through two key centres becomes two of them.
+# Allowing short runs of sections as candidates raised the best achievable
+# overlap with real human solos from 0.50 to 0.64 without loosening any
+# boundary.
+MAX_RUN = 3
+# The winning combination is a CONJUNCTION in disguise: brightness carries
+# the most weight, but a candidate cannot clear the bar on brightness alone
+# — it must also read as a foreground lead line (voiced) that moves like a
+# melody (spread) and appears nowhere else in the song (novelty).
+# Bright-only scored ~52% precision under the honest IoU criterion and
+# swung wildly between half-splits; requiring all four held 100% on every
+# split. confidence earned no weight — whatever it knows, voiced already
+# knows.
+FEATURES = ("voiced", "confidence", "spread", "bright", "novelty")
+WEIGHTS = {"voiced": 0.5, "confidence": 0.0, "spread": 0.5,
+           "bright": 1.0, "novelty": 0.5}
+MIN_Z = 1.25  # 0.5 standard deviations x the total weight of 2.5
+MAX_SOLOS = 2           # human median is 1, max 3
+
+
+def _section_spans(section_marks, last_tick, resolution):
+    bounds = [t for t, _ in section_marks] + [last_tick + 1]
+    return list(zip(bounds, bounds[1:]))
+
+
+def section_evidence(y, sr, tempo, spans, resolution):
+    """[(dict | None)] of lead-voice evidence per section, plus novelty.
+
+    Split out from detect() so the threshold sweep in tools/ can cache these
+    once per song — the audio analysis costs ~30s and the thresholds needed
+    dozens of passes over the same songs to settle.
+    """
+    rows = _features(y, sr, tempo, spans, resolution)
+    for row, fresh in zip(rows, _novelty(rows)):
+        if row is not None:
+            row["novelty"] = fresh
+            row.pop("chroma", None)
+    return rows
+
+
+def _features(y, sr, tempo, spans, resolution):
+    """Per-section lead-voice evidence, computed once over the whole song."""
+    import librosa
+
+    # Percussive energy carries no melody; the lead line lives in the
+    # harmonic part, and separating them keeps a busy drum fill from reading
+    # as a bright, active section.
+    harmonic = librosa.effects.harmonic(y, margin=2.0)
+    # hop 1024 rather than the default 512: pyin dominates the cost of the
+    # whole detector (20.5s of a 33s pass on a 3.5-minute song, halved to
+    # 10.1s here) and every feature below is a section-level average, so 46ms
+    # of pitch resolution is already far finer than anything that is read
+    # off it. Measured on the same song, the voiced share moved 0.559 ->
+    # 0.571, which is noise against a per-section z-score.
+    f0, voiced, voiced_prob = librosa.pyin(
+        harmonic, fmin=FMIN_HZ, fmax=FMAX_HZ, sr=sr, fill_na=np.nan,
+        hop_length=HOP,
+    )
+    times = librosa.times_like(f0, sr=sr, hop_length=HOP)
+    centroid = librosa.feature.spectral_centroid(y=harmonic, sr=sr)[0]
+    centroid_times = librosa.times_like(centroid, sr=sr)
+    chroma = librosa.feature.chroma_cqt(y=harmonic, sr=sr)
+    chroma_times = librosa.times_like(chroma, sr=sr, hop_length=512)
+
+    rows = []
+    for start, end in spans:
+        t0 = tempo.beat_to_time(start / resolution)
+        t1 = tempo.beat_to_time(end / resolution)
+        window = (times >= t0) & (times < t1)
+        cwindow = (centroid_times >= t0) & (centroid_times < t1)
+        hwindow = (chroma_times >= t0) & (chroma_times < t1)
+        if window.sum() < 8 or hwindow.sum() < 4:
+            rows.append(None)
+            continue
+
+        pitches = f0[window]
+        confident = voiced_prob[window]
+        sung = pitches[np.isfinite(pitches)]
+        # Semitone spread of the line: a solo moves, a held pad does not.
+        spread = (float(np.std(12 * np.log2(np.maximum(sung, 1e-6) / 440.0)))
+                  if len(sung) > 4 else 0.0)
+        rows.append({
+            "voiced": float(np.mean(np.isfinite(pitches))),
+            "confidence": float(np.mean(confident)),
+            "spread": spread,
+            "bright": float(np.mean(centroid[cwindow])) if cwindow.sum() else 0.0,
+            "chroma": chroma[:, hwindow].mean(axis=1),
+        })
+    return rows
+
+
+def _novelty(rows):
+    """1 - the best chroma match to any other section.
+
+    The formal thing that separates a solo from a riff is that it does not
+    repeat. Sections here are already the pipeline's chroma segmentation, so
+    comparing their average chroma to every other section says directly
+    whether this passage happens anywhere else in the song.
+    """
+    out = []
+    for i, row in enumerate(rows):
+        if row is None:
+            out.append(0.0)
+            continue
+        mine = row["chroma"]
+        mine = mine / (np.linalg.norm(mine) or 1.0)
+        best = 0.0
+        for j, other in enumerate(rows):
+            if j == i or other is None:
+                continue
+            theirs = other["chroma"]
+            theirs = theirs / (np.linalg.norm(theirs) or 1.0)
+            best = max(best, float(np.dot(mine, theirs)))
+        out.append(1.0 - best)
+    return out
+
+
+def _zscores(rows):
+    """Each feature restated as standard deviations from this song's own mean.
+
+    Absolute thresholds cannot survive the jump from a dense metal mix to a
+    sparse acoustic one; "unlike anything else in THIS song" can. It is also
+    what makes a single number comparable across the feature set.
+    """
+    usable = [r for r in rows if r]
+    if len(usable) < 3:
+        return None
+    stats = {}
+    for key in FEATURES:
+        values = np.array([r[key] for r in usable], dtype=float)
+        stats[key] = (float(values.mean()), float(values.std()) or 1e-6)
+    for row in rows:
+        if row is not None:
+            row["z"] = {k: (row[k] - stats[k][0]) / stats[k][1] for k in FEATURES}
+    return rows
+
+
+def _candidates(spans, rows, resolution):
+    """Runs of 1..MAX_RUN consecutive sections, with their evidence pooled."""
+    usable = [(span, row) for span, row in zip(spans, rows) if row is not None]
+    out = []
+    for i in range(len(usable)):
+        for run in range(1, MAX_RUN + 1):
+            group = usable[i:i + run]
+            if len(group) < run:
+                break
+            weights = [end - start for (start, end), _ in group]
+            total = sum(weights) or 1
+            out.append((
+                group[0][0][0], group[-1][0][1],
+                {k: sum(row["z"][k] * w for (_, row), w in zip(group, weights)) / total
+                 for k in FEATURES},
+            ))
+    return out
+
+
+def detect(expert, section_marks, lyric_events, y, sr, tempo,
+           progress=lambda m: None) -> list[tuple[int, int]]:
+    """[(start_tick, end_tick)] where the audio carries a lead break.
+
+    Returns nothing far more often than not, on purpose: 70% of human charts
+    mark no solo at all, and a marker over a verse reads as plainly wrong
+    where a missing one merely costs a bonus.
+    """
+    resolution = tempo.resolution
+    ticks = sorted({t for t, _, _ in expert})
+    if len(ticks) < 64 or not section_marks:
+        return []
+    words = sorted(t for t, e in lyric_events if e.startswith("lyric"))
+
+    last = ticks[-1]
+    spans = _section_spans(section_marks, last, resolution)
+    try:
+        rows = _zscores(section_evidence(y, sr, tempo, spans, resolution))
+    except Exception as error:  # a solo marker is never worth failing a chart
+        progress(f"      solo detection skipped: {type(error).__name__}: {error}")
+        return []
+    if rows is None:
+        return []
+
+    scored = []
+    for start, end, z in _candidates(spans, rows, resolution):
+        beats = (end - start) / resolution
+        if not (MIN_BEATS <= beats <= MAX_BEATS):
+            continue
+        if not (MIN_POS <= start / last <= MAX_POS):
+            continue
+        if sum(1 for w in words if start <= w < end) > MAX_WORDS:
+            continue
+        inside = [t for t in ticks if start <= t < end]
+        # scan-chart counts a solo containing no notes as a chart defect, and
+        # a nearly-empty one scores nothing anyway.
+        if len(inside) < 16:
+            continue
+        score = sum(WEIGHTS[k] * z[k] for k in FEATURES)
+        if score >= MIN_Z:
+            scored.append((score, inside[0], inside[-1]))
+
+    if not scored:
+        return []
+    # Overlapping runs describe the same passage; keep the best-scoring one.
+    scored.sort(reverse=True)
+    chosen: list[tuple[int, int]] = []
+    for _, start, end in scored:
+        if all(end < a or start > b for a, b in chosen):
+            chosen.append((start, end))
+        if len(chosen) >= MAX_SOLOS:
+            break
+    progress(f"      {len(chosen)} solo(s) from lead-line evidence")
+    return sorted(chosen)

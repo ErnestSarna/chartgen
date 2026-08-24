@@ -142,60 +142,6 @@ def star_power_phrases(
     return sorted(chosen)
 
 
-def solos(
-    expert: list[tuple[int, int, int]],
-    section_marks: list[tuple[int, str]],
-    lyric_events: list[tuple[int, str]],
-    resolution: int,
-    max_solos: int = 2,
-    min_bars: int = 2,
-    max_bars: int = 24,
-    min_words: int = 20,
-    density_ratio: float = 1.2,
-) -> list[tuple[int, int]]:
-    """[(start_tick, end_tick)] solo phrases: instrumental breaks that play
-    busier than the song's average, in a song that otherwise has vocals.
-
-    The vocal requirement is what makes this precise rather than a guess: a
-    solo is defined by the singer stepping back, and the lyric transcription
-    says exactly where that happens. Fully instrumental songs get no solos —
-    with no vocals anywhere, every section would qualify and the marker would
-    mean nothing. Section boundaries come from the chroma segmentation, so a
-    solo spans musically coherent bars.
-    """
-    words = sorted(t for t, e in lyric_events if e.startswith("lyric"))
-    if len(words) < min_words or not section_marks or not expert:
-        return []
-
-    ticks = sorted({t for t, _, _ in expert})
-    last = ticks[-1]
-    overall = len(ticks) / max(1.0, last / resolution)  # notes per beat
-
-    bounds = [t for t, _ in section_marks] + [last + 1]
-    candidates = []
-    for start, end in zip(bounds, bounds[1:]):
-        beats = (end - start) / resolution
-        if not (min_bars * 4 <= beats <= max_bars * 4):
-            continue
-        if any(start <= w < end for w in words):
-            continue  # someone is singing; not a solo
-        # A solo is a break BETWEEN vocal parts. An instrumental outro has no
-        # words after it and an intro none before — neither is a solo
-        # (playtested: a fade-out got marked and it read as plain wrong).
-        if not any(w < start for w in words) or not any(w >= end for w in words):
-            continue
-        inside = [t for t in ticks if start <= t < end]
-        if len(inside) < 16:
-            continue
-        density = len(inside) / beats
-        if density >= density_ratio * overall:
-            # Tight bounds to the notes actually played in the section.
-            candidates.append((density, inside[0], inside[-1] + 1))
-
-    candidates.sort(reverse=True)
-    return sorted((s, e) for _, s, e in candidates[:max_solos])
-
-
 def sections(y, sr, tempo, beats_per_bar: int = 4) -> list[tuple[int, str]]:
     """Bar-aligned practice-mode section markers from audio structure.
 

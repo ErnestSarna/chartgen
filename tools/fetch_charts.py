@@ -20,17 +20,48 @@ community service, not a CDN to hammer.
 import argparse
 import io
 import json
+import random
 import re
 import struct
 import sys
 import time
 import urllib.request
+from collections import Counter
 from pathlib import Path
 
 API = "https://api.enchor.us/search"
 FILES = "https://files.enchor.us"
 USER_AGENT = "chartgen/1.0 (calibration research; github.com/ErnestSarna/chartgen)"
 THROTTLE_S = 1.0
+
+# Freeform genre strings normalised into buckets, so a per-bucket cap can
+# force variety: the index itself is rock/metal-heavy (the audio2chart
+# paper measured its 10k-chart training set at 72% metal+rock), and
+# thresholds calibrated on a skewed sample would inherit the skew.
+GENRE_BUCKETS = (
+    ("metal", ("metal", "metalcore", "deathcore", "djent", "thrash")),
+    ("rock", ("rock", "grunge", "hard rock", "prog")),
+    ("punk", ("punk", "hardcore", "emo", "ska")),
+    ("electronic", ("edm", "electronic", "dance", "house", "techno", "trance",
+                    "dubstep", "drum", "dnb", "synth", "eurobeat", "hardstyle")),
+    ("pop", ("pop", "disco", "funk", "soul", "r&b", "rnb")),
+    ("hiphop", ("hip", "rap", "trap")),
+    ("jpop-anime", ("j-pop", "jpop", "k-pop", "kpop", "anime", "vocaloid",
+                    "touhou", "j-rock", "jrock")),
+    ("game", ("video game", "videogame", "vgm", "game", "chiptune", "8-bit")),
+    ("country-folk", ("country", "folk", "bluegrass", "acoustic")),
+    ("jazz-classical", ("jazz", "blues", "classical", "orchestral", "swing")),
+    ("indie-alt", ("indie", "alternative", "alt ")),
+)
+
+
+def genre_bucket(genre: str | None) -> str:
+    text = (genre or "").lower()
+    for bucket, needles in GENRE_BUCKETS:
+        if any(needle in text for needle in needles):
+            return bucket
+    return "other"
+
 
 # What "worth calibrating against" means, in API terms.
 MIN_LENGTH_MS, MAX_LENGTH_MS = 90_000, 480_000
@@ -137,7 +168,15 @@ def main(argv=None):
                     default=Path.home() / "Documents/Clone Hero/Songs",
                     help="skip songs already in this library")
     ap.add_argument("--start-page", type=int, default=1)
+    ap.add_argument("--genre-cap", type=int, default=None,
+                    help="max charts per genre bucket (default: 15%% of -n); "
+                         "makes the sample genre-balanced instead of "
+                         "inheriting the index's rock/metal skew")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="shuffle the page order with this seed so the pull "
+                         "samples the whole index, not its front pages")
     args = ap.parse_args(argv)
+    genre_cap = args.genre_cap or max(30, int(0.15 * args.count))
 
     args.outdir.mkdir(parents=True, exist_ok=True)
     manifest_path = args.outdir / "manifest.jsonl"
@@ -155,10 +194,24 @@ def main(argv=None):
     fetched = 0
     seen_songs = set()
     skips: dict[str, int] = {}
-    page = args.start_page
+    genres: Counter = Counter()
     started = time.time()
+
+    # Shuffled page order: Encore's default ordering front-loads whatever it
+    # front-loads; a random walk over the whole index makes the pull a real
+    # sample of every era and community, not of the first pages.
+    first = api_search(args.start_page)
+    per_page = 100
+    total_pages = max(1, (first.get("found") or 0) // per_page + 1)
+    page_order = list(range(1, total_pages + 1))
+    random.Random(args.seed).shuffle(page_order)
+    print(f"{first.get('found')} charts indexed; sampling {total_pages} pages "
+          f"in random order, genre cap {genre_cap}", flush=True)
+
     with manifest_path.open("a", encoding="utf-8") as manifest:
-        while fetched < args.count:
+        for page in page_order:
+            if fetched >= args.count:
+                break
             try:
                 result = api_search(page)
             except Exception as error:
@@ -168,8 +221,7 @@ def main(argv=None):
                 continue
             rows = result.get("data") or []
             if not rows:
-                print("no more results", flush=True)
-                break
+                continue
 
             for row in rows:
                 if fetched >= args.count:
@@ -182,6 +234,9 @@ def main(argv=None):
                     reason = "duplicate"
                 elif song_key in owned:
                     reason = "already in local library"
+                bucket = genre_bucket(row.get("genre"))
+                if not reason and genres[bucket] >= genre_cap:
+                    reason = f"genre cap ({bucket})"
                 if reason:
                     skips[reason] = skips.get(reason, 0) + 1
                     continue
@@ -216,13 +271,15 @@ def main(argv=None):
                 manifest.flush()
                 have_md5.add(md5)
                 seen_songs.add(song_key)
+                genres[bucket] += 1
                 fetched += 1
-                print(f"  [{fetched}/{args.count}] {folder.name[:64]:<66} "
-                      f"{kept} files  {time.time() - started:.0f}s", flush=True)
+                print(f"  [{fetched}/{args.count}] {bucket:<14} "
+                      f"{folder.name[:54]:<56} {time.time() - started:.0f}s",
+                      flush=True)
                 time.sleep(THROTTLE_S)
-            page += 1
 
     print(f"\nfetched {fetched} charts in {time.time() - started:.0f}s")
+    print("genre spread: " + ", ".join(f"{b} {n}" for b, n in genres.most_common()))
     for reason, count in sorted(skips.items(), key=lambda s: -s[1]):
         print(f"  skipped {count}: {reason}")
     return 0

@@ -3,12 +3,12 @@ extract every feature the threshold sweeps need.
 
 Stages, sequential so the network hour finishes before the CPU hours:
 
-1. fetch ~400 full-ladder, issue-free charts from Chorus Encore
-   (~1h, ~1.6GB; audio is KEPT so future features never re-download)
+1. fetch ~800 full-ladder, issue-free charts from Chorus Encore
+   (~2h, ~3GB; audio is KEPT so future features never re-download)
 2. chart-only studies on the new set (minutes: solo conventions, tap
    usage, lyric-gap sweep - these print to the log for the morning)
-3. solo evidence dump, two workers (~2-3h)
-4. tap feature dump, two workers (~1-1.5h)
+3. solo evidence dump, two workers (~3-4h)
+4. tap feature dump, two workers (~1.5-2h)
 
 Everything lands under work/cal_*; the morning job is just re-running
 sweep_solos.py / sweep_taps.py against the new caches next to the old.
@@ -59,7 +59,7 @@ def run_pair(label: str, script: str, out_stem: str, total: int, extra: list) ->
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--count", type=int, default=400)
+    ap.add_argument("--count", type=int, default=800)
     ap.add_argument("--skip-fetch", action="store_true")
     args = ap.parse_args(argv)
 
@@ -80,8 +80,8 @@ def main(argv=None):
 
     # The audio hours. Solo evidence first: it feeds the higher-stakes rule.
     run_pair("solo evidence dump", "dump_solo_features.py", "cal_solo",
-             total=220, extra=["--limit", "220"])
-    run_pair("tap feature dump", "dump_tap_features.py", "cal_taps", total=200)
+             total=300, extra=["--limit", "300"])
+    run_pair("tap feature dump", "dump_tap_features.py", "cal_taps", total=250)
 
     hours = (time.time() - started) / 3600
     print(f"\nall stages done in {hours:.1f}h. Morning: re-run sweep_solos.py "

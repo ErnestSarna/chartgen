@@ -2,9 +2,11 @@
 
     python -m chartgen.app
 
-Tkinter on purpose: it ships with Python, so the UI adds no dependency and
-nothing extra to bundle. Generation runs on a worker thread and reports through a
-queue — Tk widgets are only ever touched from the main thread.
+Tkinter on purpose: it ships with Python, so the UI adds almost nothing to
+bundle. The look comes from sv-ttk (a pure-Python Fluent/Win11 theme, ~50 kB);
+if it is missing the app still runs on the stock theme. Generation runs on a
+worker thread and reports through a queue — Tk widgets are only ever touched
+from the main thread.
 """
 import json
 import os
@@ -14,6 +16,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from argparse import Namespace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -73,6 +76,51 @@ def save_settings(values: dict) -> None:
         pass  # settings are a convenience; never fail a run over them
 
 
+# Set by apply_theme(); the App reads these so a machine without sv-ttk still
+# gets readable colours on the stock light theme.
+DARK = False
+MUTED = "#666666"
+LOG_BG, LOG_FG = "#ffffff", "#222222"
+
+
+def apply_theme(root: tk.Tk) -> None:
+    global DARK, MUTED, LOG_BG, LOG_FG
+    try:
+        import sv_ttk
+
+        sv_ttk.set_theme("dark", root)
+        DARK = True
+        MUTED = "#9aa0a6"
+        LOG_BG, LOG_FG = "#161616", "#d6d6d6"
+    except Exception:
+        try:
+            ttk.Style().theme_use("vista")
+        except tk.TclError:
+            pass
+
+
+def dark_title_bar(root: "tk.Tk | tk.Toplevel") -> None:
+    """Ask DWM to paint the title bar dark so it matches the window."""
+    if not DARK or sys.platform != "win32":
+        return
+    try:
+        from ctypes import byref, c_int, sizeof, windll
+
+        root.update_idletasks()
+        hwnd = windll.user32.GetParent(root.winfo_id())
+        # 20 is DWMWA_USE_IMMERSIVE_DARK_MODE; pre-20H1 builds used 19.
+        for attr in (20, 19):
+            if windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, byref(c_int(1)), sizeof(c_int)) == 0:
+                break
+        # Nudge the non-client area to repaint, else the bar stays light
+        # until the window is moved.
+        root.withdraw()
+        root.deiconify()
+    except Exception:
+        pass
+
+
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -86,146 +134,207 @@ class App:
         saved = load_settings()
 
         root.title("chartgen — Clone Hero chart generator")
-        root.minsize(720, 560)
+        # Pixel sizes don't scale with DPI, fonts do; scale the frame so the
+        # layout isn't cramped at 125/150 % display scaling.
+        scale = root.winfo_fpixels("1i") / 96
+        root.minsize(int(720 * scale), int(620 * scale))
+        root.geometry(f"{int(760 * scale)}x{int(790 * scale)}")
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(3, weight=1)
+        root.rowconfigure(9, weight=1)
 
+        self._build_header()
+        self._section("Song", row=1)
         self._build_input(saved)
+        self._section("Options", row=3)
         self._build_options(saved)
+        self._build_advanced(saved)
         self._build_actions()
+        self._section("Progress", row=8)
         self._build_output()
         root.after(100, self._drain)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------------------------------------------------------------- layout
+    def _section(self, text: str, row: int):
+        ttk.Label(self.root, text=text.upper(), foreground=MUTED,
+                  font=("Segoe UI", 8, "bold")).grid(
+            row=row, column=0, sticky="w", padx=22, pady=(14, 4))
+
+    def _card(self, row: int, expand=False) -> ttk.Frame:
+        frame = ttk.Frame(self.root, style="Card.TFrame", padding=14)
+        frame.grid(row=row, column=0, sticky="nsew" if expand else "ew", padx=16)
+        return frame
+
+    def _build_header(self):
+        head = ttk.Frame(self.root)
+        head.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 0))
+        bg = ttk.Style().lookup("TFrame", "background") or self.root.cget("bg")
+        logo = tk.Canvas(head, width=30, height=30, highlightthickness=0, bg=bg)
+        for x, height, color in ((4, 16, "#34d17b"), (13, 9, "#e8b84b"),
+                                 (22, 13, "#e2665e")):
+            logo.create_rectangle(x, 26 - height, x + 5, 26, fill=color, width=0)
+        logo.pack(side="left", padx=(0, 10))
+        ttk.Label(head, text="chartgen",
+                  font=("Segoe UI Semibold", 15)).pack(side="left")
+        ttk.Label(head, text="Clone Hero chart generator", foreground=MUTED,
+                  font=("Segoe UI", 10)).pack(side="left", padx=(10, 0), pady=(4, 0))
+
     def _build_input(self, saved):
-        frame = ttk.LabelFrame(self.root, text="Song", padding=8)
-        frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        frame = self._card(row=2)
         frame.columnconfigure(1, weight=1)
 
         self.audio = tk.StringVar()
         ttk.Label(frame, text="Audio / YouTube").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=self.audio).grid(row=0, column=1, sticky="ew", padx=6)
+        ttk.Entry(frame, textvariable=self.audio).grid(row=0, column=1, sticky="ew", padx=10)
         ttk.Button(frame, text="Browse…", command=self._pick_audio).grid(row=0, column=2)
         ttk.Label(frame, text="Paste a YouTube link here to download and chart it.",
-                  foreground="#666").grid(row=1, column=1, sticky="w", padx=6)
+                  foreground=MUTED).grid(row=1, column=1, sticky="w", padx=10)
 
-        self.artist = tk.StringVar(value="")
-        self.title = tk.StringVar(value="")
-        ttk.Label(frame, text="Artist").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(frame, textvariable=self.artist).grid(row=2, column=1, sticky="ew",
-                                                       padx=6, pady=(6, 0))
-        ttk.Label(frame, text="Title").grid(row=3, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(frame, textvariable=self.title).grid(row=3, column=1, sticky="ew",
-                                                      padx=6, pady=(6, 0))
-
+        # No artist/title fields: the pipeline fills them itself — YouTube
+        # metadata for links, audio tags for files, filename as last resort.
         self.outdir = tk.StringVar(value=saved.get("outdir", str(Path("out").resolve())))
-        ttk.Label(frame, text="Save to").grid(row=4, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(frame, textvariable=self.outdir).grid(row=4, column=1, sticky="ew",
-                                                       padx=6, pady=(6, 0))
+        ttk.Label(frame, text="Save to").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.outdir).grid(row=2, column=1, sticky="ew",
+                                                        padx=10, pady=(8, 0))
         ttk.Button(frame, text="Browse…", command=self._pick_outdir).grid(
-            row=4, column=2, pady=(6, 0))
+            row=2, column=2, pady=(8, 0))
         ttk.Label(frame, text="Tip: point this at your Clone Hero songs folder.",
-                  foreground="#666").grid(row=5, column=1, sticky="w", padx=6)
+                  foreground=MUTED).grid(row=3, column=1, sticky="w", padx=10)
 
     def _build_options(self, saved):
-        frame = ttk.LabelFrame(self.root, text="Options", padding=8)
-        frame.grid(row=1, column=0, sticky="ew", padx=10, pady=4)
+        """The choices that change what kind of chart you get."""
+        frame = self._card(row=4)
         for col in (1, 3):
             frame.columnconfigure(col, weight=1)
 
         self.engine = tk.StringVar(value=saved.get("engine", list(ENGINES)[0]))
         ttk.Label(frame, text="Note source").grid(row=0, column=0, sticky="w")
         ttk.Combobox(frame, textvariable=self.engine, values=list(ENGINES),
-                     state="readonly", width=32).grid(row=0, column=1, sticky="w", padx=6)
-
-        self.grid_choice = tk.StringVar(value=saved.get("grid", list(GRIDS)[0]))
-        ttk.Label(frame, text="Note grid").grid(row=0, column=2, sticky="w")
-        ttk.Combobox(frame, textvariable=self.grid_choice, values=list(GRIDS),
-                     state="readonly", width=20).grid(row=0, column=3, sticky="w", padx=6)
-
-        self.fret_mode = tk.StringVar(value=saved.get("fret_mode", list(FRET_MODES)[0]))
-        ttk.Label(frame, text="Fret choice").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Combobox(frame, textvariable=self.fret_mode, values=list(FRET_MODES),
-                     state="readonly", width=26).grid(row=1, column=1, sticky="w",
-                                                     padx=6, pady=(6, 0))
+                     state="readonly", width=32).grid(row=0, column=1, sticky="w", padx=10)
 
         self.target_diff = tk.StringVar(value=saved.get("target_diff", "Auto"))
-        ttk.Label(frame, text="Max difficulty").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Label(frame, text="Max difficulty").grid(row=0, column=2, sticky="w")
         ttk.Combobox(frame, textvariable=self.target_diff,
                      values=["Auto"] + [str(n) for n in range(7)],
-                     state="readonly", width=6).grid(row=1, column=3, sticky="w",
-                                                    padx=6, pady=(6, 0))
-
-        self.attempts = tk.IntVar(value=saved.get("attempts", 3))
-        ttk.Label(frame, text="Retries if poor").grid(row=2, column=2, sticky="w", pady=(6, 0))
-        ttk.Spinbox(frame, from_=1, to=8, textvariable=self.attempts, width=5).grid(
-            row=2, column=3, sticky="w", padx=6, pady=(6, 0))
-
-        self.sustain_gap = tk.DoubleVar(value=saved.get("sustain_gap", 1.0))
-        ttk.Label(frame, text="Sustain gap (beats)").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        ttk.Spinbox(frame, from_=0.25, to=4.0, increment=0.25, width=5,
-                    textvariable=self.sustain_gap).grid(row=2, column=1, sticky="w",
-                                                        padx=6, pady=(6, 0))
-
-        self.model = tk.StringVar(value=saved.get("model", list(MODELS)[0]))
-        ttk.Label(frame, text="Neural checkpoint").grid(row=3, column=0, sticky="w",
-                                                       pady=(6, 0))
-        ttk.Combobox(frame, textvariable=self.model, values=list(MODELS),
-                     state="readonly", width=26).grid(row=3, column=1, sticky="w",
-                                                      padx=6, pady=(6, 0))
-        ttk.Label(frame, text="(only used by the neural source)",
-                  foreground="#666").grid(row=3, column=2, columnspan=2, sticky="w")
-
-        self.lyric_source = tk.StringVar(
-            value=saved.get("lyric_source", list(LYRIC_SOURCES)[0]))
-        ttk.Label(frame, text="Lyrics from").grid(row=4, column=0, sticky="w",
-                                                 pady=(6, 0))
-        ttk.Combobox(frame, textvariable=self.lyric_source,
-                     values=list(LYRIC_SOURCES), state="readonly",
-                     width=26).grid(row=4, column=1, sticky="w", padx=6, pady=(6, 0))
+                     state="readonly", width=6).grid(row=0, column=3, sticky="w", padx=10)
 
         toggles = ttk.Frame(frame)
-        toggles.grid(row=5, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        toggles.grid(row=1, column=0, columnspan=4, sticky="w", pady=(12, 0))
         self.sustains = tk.BooleanVar(value=saved.get("sustains", True))
         self.star_power = tk.BooleanVar(value=saved.get("star_power", True))
         self.sections = tk.BooleanVar(value=saved.get("sections", True))
         self.hopos = tk.BooleanVar(value=saved.get("hopos", True))
         self.lyrics = tk.BooleanVar(value=saved.get("lyrics", True))
         self.taps = tk.BooleanVar(value=saved.get("taps", False))
+        self.solos = tk.BooleanVar(value=saved.get("solos", True))
         for text, var in (("Sustains", self.sustains), ("Star power", self.star_power),
                           ("Sections", self.sections), ("HOPOs", self.hopos),
-                          ("Lyrics", self.lyrics),
-                          ("Taps (experimental)", self.taps)):
+                          ("Lyrics", self.lyrics), ("Solos", self.solos),
+                          ("Taps", self.taps)):
             ttk.Checkbutton(toggles, text=text, variable=var).pack(side="left", padx=(0, 14))
+
+    def _build_advanced(self, saved):
+        """The technical knobs; the defaults are the calibrated champions.
+
+        Collapsed by default so the everyday screen stays simple; clicking the
+        header toggles it. grid_remove() keeps the grid options, so re-showing
+        is a plain grid() and the log card soaks up the height either way.
+        """
+        self.adv_open = False
+        self.adv_head = ttk.Label(self.root, text="ADVANCED  ▸", foreground=MUTED,
+                                  font=("Segoe UI", 8, "bold"), cursor="hand2")
+        self.adv_head.grid(row=5, column=0, sticky="w", padx=22, pady=(14, 4))
+        self.adv_head.bind("<Button-1>", self._toggle_advanced)
+
+        frame = self.adv_card = self._card(row=6)
+        for col in (1, 3):
+            frame.columnconfigure(col, weight=1)
+
+        self.grid_choice = tk.StringVar(value=saved.get("grid", list(GRIDS)[0]))
+        ttk.Label(frame, text="Note grid").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(frame, textvariable=self.grid_choice, values=list(GRIDS),
+                     state="readonly", width=22).grid(row=0, column=1, sticky="w", padx=10)
+
+        self.attempts = tk.IntVar(value=saved.get("attempts", 3))
+        ttk.Label(frame, text="Retries if poor").grid(row=0, column=2, sticky="w")
+        ttk.Spinbox(frame, from_=1, to=8, textvariable=self.attempts, width=5).grid(
+            row=0, column=3, sticky="w", padx=10)
+
+        self.fret_mode = tk.StringVar(value=saved.get("fret_mode", list(FRET_MODES)[0]))
+        ttk.Label(frame, text="Fret choice").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Combobox(frame, textvariable=self.fret_mode, values=list(FRET_MODES),
+                     state="readonly", width=22).grid(row=1, column=1, sticky="w",
+                                                      padx=10, pady=(8, 0))
+
+        self.sustain_gap = tk.DoubleVar(value=saved.get("sustain_gap", 1.0))
+        ttk.Label(frame, text="Sustain gap (beats)").grid(row=1, column=2, sticky="w",
+                                                          pady=(8, 0))
+        ttk.Spinbox(frame, from_=0.25, to=4.0, increment=0.25, width=5,
+                    textvariable=self.sustain_gap).grid(row=1, column=3, sticky="w",
+                                                        padx=10, pady=(8, 0))
+
+        self.lyric_source = tk.StringVar(
+            value=saved.get("lyric_source", list(LYRIC_SOURCES)[0]))
+        ttk.Label(frame, text="Lyrics from").grid(row=2, column=0, sticky="w",
+                                                  pady=(8, 0))
+        ttk.Combobox(frame, textvariable=self.lyric_source,
+                     values=list(LYRIC_SOURCES), state="readonly",
+                     width=22).grid(row=2, column=1, sticky="w", padx=10, pady=(8, 0))
+
+        self.model = tk.StringVar(value=saved.get("model", list(MODELS)[0]))
+        ttk.Label(frame, text="Neural checkpoint").grid(row=3, column=0, sticky="w",
+                                                        pady=(8, 0))
+        ttk.Combobox(frame, textvariable=self.model, values=list(MODELS),
+                     state="readonly", width=22).grid(row=3, column=1, sticky="w",
+                                                      padx=10, pady=(8, 0))
+        ttk.Label(frame, text="(only used by the neural source)",
+                  foreground=MUTED).grid(row=3, column=2, columnspan=2, sticky="w",
+                                         pady=(8, 0))
+        frame.grid_remove()
+
+    def _toggle_advanced(self, _event=None):
+        self.adv_open = not self.adv_open
+        if self.adv_open:
+            self.adv_card.grid()
+        else:
+            self.adv_card.grid_remove()
+        self.adv_head.configure(
+            text="ADVANCED  ▾" if self.adv_open else "ADVANCED  ▸")
 
     def _build_actions(self):
         frame = ttk.Frame(self.root)
-        frame.grid(row=2, column=0, sticky="ew", padx=10, pady=4)
+        frame.grid(row=7, column=0, sticky="ew", padx=16, pady=(14, 0))
         frame.columnconfigure(2, weight=1)
-        self.go = ttk.Button(frame, text="Generate chart", command=self._start)
+        self.go = ttk.Button(frame, text="Generate chart", command=self._start,
+                             style="Accent.TButton")
         self.go.grid(row=0, column=0)
         self.stop = ttk.Button(frame, text="Cancel", command=self._request_cancel,
                                state="disabled")
-        self.stop.grid(row=0, column=1, padx=6)
+        self.stop.grid(row=0, column=1, padx=10)
         self.bar = ttk.Progressbar(frame, mode="determinate", maximum=6)
-        self.bar.grid(row=0, column=2, sticky="ew", padx=6)
-        self.status = ttk.Label(frame, text="Ready", width=26, anchor="e")
+        self.bar.grid(row=0, column=2, sticky="ew", padx=10)
+        self.status = ttk.Label(frame, text="Ready", width=26, anchor="e",
+                                foreground=MUTED)
         self.status.grid(row=0, column=3)
 
     def _build_output(self):
-        frame = ttk.LabelFrame(self.root, text="Progress", padding=8)
-        frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=4)
+        frame = self._card(row=9, expand=True)
+        frame.configure(padding=6)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
-        self.log = tk.Text(frame, height=12, wrap="none", font=("Consolas", 9))
+        mono = ("Cascadia Mono" if "Cascadia Mono" in tkfont.families()
+                else "Consolas")
+        self.log = tk.Text(frame, height=6, wrap="none", font=(mono, 9),
+                           bg=LOG_BG, fg=LOG_FG, insertbackground=LOG_FG,
+                           relief="flat", borderwidth=0, padx=10, pady=8,
+                           selectbackground="#2f4f77" if DARK else "#cce4ff")
         self.log.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(frame, command=self.log.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.log.configure(yscrollcommand=scroll.set, state="disabled")
 
         actions = ttk.Frame(self.root)
-        actions.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 10))
+        actions.grid(row=10, column=0, sticky="ew", padx=16, pady=(12, 16))
         self.open_button = ttk.Button(actions, text="Open song folder",
                                       command=self._open_folder, state="disabled")
         self.open_button.pack(side="left")
@@ -240,27 +349,72 @@ class App:
         if len(paths) == 1:
             self.batch_files = []
             self.audio.set(paths[0])
-            # Fill artist/title from the file's tags (or its name) so the
-            # song shows up properly in CH without any typing. Only fields
-            # the user left empty are touched.
-            from . import tags
-
-            artist, name = tags.guess_metadata(paths[0])
-            if not self.title.get() and name:
-                self.title.set(name)
-            if not self.artist.get() and artist:
-                self.artist.set(artist)
         else:
             # Batch: metadata comes from each file's own tags at run time.
             self.batch_files = list(paths)
             self.audio.set(f"{len(paths)} files selected")
-            self.title.set("")
-            self.artist.set("")
 
     def _pick_outdir(self):
         path = filedialog.askdirectory(title="Where to save the song folder")
         if path:
             self.outdir.set(path)
+
+    def _ask_metadata(self, path: Path):
+        """Prompt for artist/title when a file carries no usable tags.
+
+        Returns (artist, title) — either may be None, meaning let the
+        pipeline fall back — or None entirely if the user cancelled the run.
+        Only called for a single local file; links and batches resolve their
+        own metadata.
+        """
+        from . import tags
+
+        artist, name = tags.guess_metadata(str(path))
+        if artist and name:
+            return artist, name
+
+        win = tk.Toplevel(self.root)
+        win.title("Song details")
+        win.resizable(False, False)
+        win.transient(self.root)
+        frame = ttk.Frame(win, padding=16)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+        ttk.Label(frame, text=f"{path.name} has no usable tags — how should "
+                              f"this song be listed?").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        artist_var = tk.StringVar(value=artist or "")
+        name_var = tk.StringVar(value=name or path.stem)
+        ttk.Label(frame, text="Artist").grid(row=1, column=0, sticky="w")
+        artist_entry = ttk.Entry(frame, textvariable=artist_var, width=36)
+        artist_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0))
+        ttk.Label(frame, text="Title").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frame, textvariable=name_var, width=36).grid(
+            row=2, column=1, sticky="ew", padx=(10, 0), pady=(8, 0))
+
+        result = {}
+        def ok(_event=None):
+            result["v"] = (artist_var.get().strip() or None,
+                           name_var.get().strip() or None)
+            win.destroy()
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        ttk.Button(buttons, text="Cancel", command=win.destroy).pack(
+            side="left", padx=(0, 8))
+        ttk.Button(buttons, text="Chart it", style="Accent.TButton",
+                   command=ok).pack(side="left")
+        win.bind("<Return>", ok)
+        win.bind("<Escape>", lambda e: win.destroy())
+
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width()
+                                       - win.winfo_reqwidth()) // 2
+        win.geometry(f"+{max(x, 0)}+{self.root.winfo_rooty() + 160}")
+        dark_title_bar(win)
+        win.grab_set()
+        artist_entry.focus_set()
+        self.root.wait_window(win)
+        return result.get("v")
 
     def _write(self, line):
         self.log.configure(state="normal")
@@ -286,6 +440,12 @@ class App:
             messagebox.showerror(
                 "chartgen", "Choose audio file(s) or paste YouTube link(s) first.")
             return
+        meta_artist = meta_name = None
+        if not batch and not is_url:
+            asked = self._ask_metadata(Path(audio))
+            if asked is None:
+                return  # user closed the prompt: don't chart
+            meta_artist, meta_name = asked
         save_settings(self._settings())
         base = Namespace(
             # URLs must stay strings; Path("https://…") collapses the //.
@@ -303,9 +463,10 @@ class App:
                          else int(self.target_diff.get())),
             lyrics=self.lyrics.get(),
             taps=self.taps.get(),
+            no_solos=not self.solos.get(),
             lyric_source=LYRIC_SOURCES.get(self.lyric_source.get(), "auto"),
-            name=self.title.get().strip() or None,
-            artist=self.artist.get().strip() or "Unknown",
+            name=meta_name,
+            artist=meta_artist or "Unknown",
             album="", genre="", year="",
         )
         queue_items = batch or [base.audio]
@@ -476,6 +637,7 @@ class App:
             "engine": self.engine.get(),
             "lyric_source": self.lyric_source.get(),
             "taps": self.taps.get(),
+            "solos": self.solos.get(),
         }
 
     def _on_close(self):
@@ -490,12 +652,19 @@ class App:
 
 
 def main():
+    if sys.platform == "win32":
+        # Without this Tk renders at 96 DPI and Windows stretches the bitmap,
+        # which is the classic blurry-Tkinter look on scaled displays.
+        try:
+            from ctypes import windll
+
+            windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
     root = tk.Tk()
-    try:
-        ttk.Style().theme_use("vista")
-    except tk.TclError:
-        pass
+    apply_theme(root)
     App(root)
+    dark_title_bar(root)
     root.mainloop()
 
 

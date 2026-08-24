@@ -121,6 +121,120 @@ def dark_title_bar(root: "tk.Tk | tk.Toplevel") -> None:
         pass
 
 
+class Tooltip:
+    """Hover text for a widget. Tk ships no tooltip, so: a borderless
+    Toplevel that appears under the pointer after a short delay and dies on
+    leave/click. One instance per widget; themed to match the app."""
+
+    DELAY_MS = 450
+    WRAP_PX = 320
+
+    def __init__(self, widget, text: str):
+        self.widget, self.text = widget, text
+        self.tip = None
+        self.after_id = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        for event in ("<Leave>", "<ButtonPress>"):
+            widget.bind(event, self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self.after_id = self.widget.after(self.DELAY_MS, self._show)
+
+    def _cancel(self):
+        if self.after_id:
+            self.widget.after_cancel(self.after_id)
+            self.after_id = None
+
+    def _show(self):
+        if self.tip or not self.widget.winfo_exists():
+            return
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{x}+{y}")
+        bg, fg = ("#2a2a2a", "#e8e8e8") if DARK else ("#ffffe1", "#222222")
+        tk.Label(self.tip, text=self.text, justify="left", wraplength=self.WRAP_PX,
+                 background=bg, foreground=fg, relief="solid", borderwidth=1,
+                 font=("Segoe UI", 9), padx=8, pady=6).pack()
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
+
+TIPS = {
+    "audio": "A song file (mp3/flac/wav/ogg, 30s+), a YouTube link, or a "
+             "whole playlist link. Several at once each become their own "
+             "song folder.",
+    "outdir": "Each song becomes its own folder here with notes.chart, "
+              "audio and album art. Point it at your Clone Hero songs "
+              "folder and new charts appear after a rescan.",
+    "engine": "Where Expert notes come from. Transcription reads the "
+              "audio's actual pitches - deterministic, same chart every "
+              "run. The neural model is a generator: sometimes better "
+              "ideas, sometimes worse, so it rolls several times and keeps "
+              "the roll that best matches the audio.",
+    "target_diff": "Caps the difficulty badge (0-6). The chart is thinned "
+                   "until it rates at or below this, and the whole "
+                   "Easy-Expert ladder scales down with it. Auto keeps "
+                   "whatever the song supports. Notes are never invented "
+                   "to raise a rating.",
+    "sustains": "Long notes you hold for bonus points. Placed where the "
+                "audio actually holds a sound; share calibrated against "
+                "human charts (~9-15% by tier).",
+    "star_power": "The glowing phrase groups that charge 2x score. About "
+                  "one phrase every 30-40 seconds, avoiding the very end "
+                  "where they could never be spent.",
+    "sections": "Named practice-mode markers (Section 1, 2...) at the "
+                "song's real structural boundaries, for CH's practice "
+                "seek menu.",
+    "hopos": "Hammer-ons/pull-offs: close-spaced notes play without "
+             "strumming, shown with a white ring. Uses CH's natural "
+             "spacing rule, like human charts.",
+    "lyrics": "Words scroll above the highway as they're sung. Real "
+              "synced lyrics are looked up online first; if the song "
+              "isn't in the database, the vocals are transcribed "
+              "locally. Instrumentals cleanly get none.",
+    "solos": "E solo sections that award bonus points per note hit. "
+             "Detected from the audio - a lead line that stands out from "
+             "the rest of the song. Deliberately conservative: most songs "
+             "get none (70% of human charts have none either); a marker "
+             "that does appear is almost always a real lead break.",
+    "taps": "Marks soft phrases - piano lines, plucks, gentle synth runs - "
+            "as tap notes, playable without strumming. Off by default: "
+            "it's a stylistic choice, and human charters only half-agree "
+            "on when to tap. Worth trying on songs with clear quiet "
+            "passages.",
+    "grid": "The finest rhythm notes can land on. 16ths fit almost "
+            "everything; 8ths force a sparser, easier chart; triplet 8ths "
+            "suit shuffle/swing songs.",
+    "attempts": "Neural source only: reroll up to this many times if a "
+                "chart scores poorly, keeping the best roll. A good first "
+                "roll stops early, so high values only cost time on "
+                "difficult songs.",
+    "fret_mode": "How notes pick their lane (green-orange). Follow the "
+                 "melody: lanes track the audio's pitch, so repeated notes "
+                 "repeat and rising lines rise. Raw model output is "
+                 "pitch-blind - kept for comparison.",
+    "sustain_gap": "Beats of empty space needed after a note before it "
+                   "becomes a sustain. Lower = more and shorter sustains; "
+                   "higher = only clearly-held notes sustain.",
+    "lyric_source": "Look up online: fetch hand-synced lyrics from LRCLIB "
+                    "(free, no account) - the right words with human "
+                    "timing. Listen: transcribe the vocals locally with "
+                    "Whisper, which can mishear or invent words over "
+                    "instrumental outros. Default tries the lookup and "
+                    "only listens when the song isn't in the database.",
+    "model": "Checkpoint for the neural source. Quality (M) charts "
+             "better; Fast (S) is ~9x smaller and quicker. Ignored by "
+             "the transcription source.",
+}
+
+
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -155,6 +269,12 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------------------------------------------------------------- layout
+    @staticmethod
+    def _tip(key: str, *widgets):
+        """One tooltip text on the option's label and its control alike."""
+        for widget in widgets:
+            Tooltip(widget, TIPS[key])
+
     def _section(self, text: str, row: int):
         ttk.Label(self.root, text=text.upper(), foreground=MUTED,
                   font=("Segoe UI", 8, "bold")).grid(
@@ -184,8 +304,11 @@ class App:
         frame.columnconfigure(1, weight=1)
 
         self.audio = tk.StringVar()
-        ttk.Label(frame, text="Audio / YouTube").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=self.audio).grid(row=0, column=1, sticky="ew", padx=10)
+        label = ttk.Label(frame, text="Audio / YouTube")
+        label.grid(row=0, column=0, sticky="w")
+        entry = ttk.Entry(frame, textvariable=self.audio)
+        entry.grid(row=0, column=1, sticky="ew", padx=10)
+        self._tip("audio", label, entry)
         ttk.Button(frame, text="Browse…", command=self._pick_audio).grid(row=0, column=2)
         ttk.Label(frame, text="Paste a YouTube link here to download and chart it.",
                   foreground=MUTED).grid(row=1, column=1, sticky="w", padx=10)
@@ -193,9 +316,11 @@ class App:
         # No artist/title fields: the pipeline fills them itself — YouTube
         # metadata for links, audio tags for files, filename as last resort.
         self.outdir = tk.StringVar(value=saved.get("outdir", str(Path("out").resolve())))
-        ttk.Label(frame, text="Save to").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(frame, textvariable=self.outdir).grid(row=2, column=1, sticky="ew",
-                                                        padx=10, pady=(8, 0))
+        label = ttk.Label(frame, text="Save to")
+        label.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        entry = ttk.Entry(frame, textvariable=self.outdir)
+        entry.grid(row=2, column=1, sticky="ew", padx=10, pady=(8, 0))
+        self._tip("outdir", label, entry)
         ttk.Button(frame, text="Browse…", command=self._pick_outdir).grid(
             row=2, column=2, pady=(8, 0))
         ttk.Label(frame, text="Tip: point this at your Clone Hero songs folder.",
@@ -208,15 +333,21 @@ class App:
             frame.columnconfigure(col, weight=1)
 
         self.engine = tk.StringVar(value=saved.get("engine", list(ENGINES)[0]))
-        ttk.Label(frame, text="Note source").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(frame, textvariable=self.engine, values=list(ENGINES),
-                     state="readonly", width=32).grid(row=0, column=1, sticky="w", padx=10)
+        label = ttk.Label(frame, text="Note source")
+        label.grid(row=0, column=0, sticky="w")
+        combo = ttk.Combobox(frame, textvariable=self.engine, values=list(ENGINES),
+                             state="readonly", width=32)
+        combo.grid(row=0, column=1, sticky="w", padx=10)
+        self._tip("engine", label, combo)
 
         self.target_diff = tk.StringVar(value=saved.get("target_diff", "Auto"))
-        ttk.Label(frame, text="Max difficulty").grid(row=0, column=2, sticky="w")
-        ttk.Combobox(frame, textvariable=self.target_diff,
-                     values=["Auto"] + [str(n) for n in range(7)],
-                     state="readonly", width=6).grid(row=0, column=3, sticky="w", padx=10)
+        label = ttk.Label(frame, text="Max difficulty")
+        label.grid(row=0, column=2, sticky="w")
+        combo = ttk.Combobox(frame, textvariable=self.target_diff,
+                             values=["Auto"] + [str(n) for n in range(7)],
+                             state="readonly", width=6)
+        combo.grid(row=0, column=3, sticky="w", padx=10)
+        self._tip("target_diff", label, combo)
 
         toggles = ttk.Frame(frame)
         toggles.grid(row=1, column=0, columnspan=4, sticky="w", pady=(12, 0))
@@ -227,11 +358,17 @@ class App:
         self.lyrics = tk.BooleanVar(value=saved.get("lyrics", True))
         self.taps = tk.BooleanVar(value=saved.get("taps", False))
         self.solos = tk.BooleanVar(value=saved.get("solos", True))
-        for text, var in (("Sustains", self.sustains), ("Star power", self.star_power),
-                          ("Sections", self.sections), ("HOPOs", self.hopos),
-                          ("Lyrics", self.lyrics), ("Solos", self.solos),
-                          ("Taps", self.taps)):
-            ttk.Checkbutton(toggles, text=text, variable=var).pack(side="left", padx=(0, 14))
+        for text, var, key in (
+                ("Sustains", self.sustains, "sustains"),
+                ("Star power", self.star_power, "star_power"),
+                ("Sections", self.sections, "sections"),
+                ("HOPOs", self.hopos, "hopos"),
+                ("Lyrics", self.lyrics, "lyrics"),
+                ("Solos", self.solos, "solos"),
+                ("Taps", self.taps, "taps")):
+            box = ttk.Checkbutton(toggles, text=text, variable=var)
+            box.pack(side="left", padx=(0, 14))
+            self._tip(key, box)
 
     def _build_advanced(self, saved):
         """The technical knobs; the defaults are the calibrated champions.
@@ -251,42 +388,52 @@ class App:
             frame.columnconfigure(col, weight=1)
 
         self.grid_choice = tk.StringVar(value=saved.get("grid", list(GRIDS)[0]))
-        ttk.Label(frame, text="Note grid").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(frame, textvariable=self.grid_choice, values=list(GRIDS),
-                     state="readonly", width=22).grid(row=0, column=1, sticky="w", padx=10)
+        label = ttk.Label(frame, text="Note grid")
+        label.grid(row=0, column=0, sticky="w")
+        combo = ttk.Combobox(frame, textvariable=self.grid_choice, values=list(GRIDS),
+                             state="readonly", width=22)
+        combo.grid(row=0, column=1, sticky="w", padx=10)
+        self._tip("grid", label, combo)
 
         self.attempts = tk.IntVar(value=saved.get("attempts", 3))
-        ttk.Label(frame, text="Retries if poor").grid(row=0, column=2, sticky="w")
-        ttk.Spinbox(frame, from_=1, to=8, textvariable=self.attempts, width=5).grid(
-            row=0, column=3, sticky="w", padx=10)
+        label = ttk.Label(frame, text="Retries if poor")
+        label.grid(row=0, column=2, sticky="w")
+        spin = ttk.Spinbox(frame, from_=1, to=8, textvariable=self.attempts, width=5)
+        spin.grid(row=0, column=3, sticky="w", padx=10)
+        self._tip("attempts", label, spin)
 
         self.fret_mode = tk.StringVar(value=saved.get("fret_mode", list(FRET_MODES)[0]))
-        ttk.Label(frame, text="Fret choice").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        ttk.Combobox(frame, textvariable=self.fret_mode, values=list(FRET_MODES),
-                     state="readonly", width=22).grid(row=1, column=1, sticky="w",
-                                                      padx=10, pady=(8, 0))
+        label = ttk.Label(frame, text="Fret choice")
+        label.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        combo = ttk.Combobox(frame, textvariable=self.fret_mode, values=list(FRET_MODES),
+                             state="readonly", width=22)
+        combo.grid(row=1, column=1, sticky="w", padx=10, pady=(8, 0))
+        self._tip("fret_mode", label, combo)
 
         self.sustain_gap = tk.DoubleVar(value=saved.get("sustain_gap", 1.0))
-        ttk.Label(frame, text="Sustain gap (beats)").grid(row=1, column=2, sticky="w",
-                                                          pady=(8, 0))
-        ttk.Spinbox(frame, from_=0.25, to=4.0, increment=0.25, width=5,
-                    textvariable=self.sustain_gap).grid(row=1, column=3, sticky="w",
-                                                        padx=10, pady=(8, 0))
+        label = ttk.Label(frame, text="Sustain gap (beats)")
+        label.grid(row=1, column=2, sticky="w", pady=(8, 0))
+        spin = ttk.Spinbox(frame, from_=0.25, to=4.0, increment=0.25, width=5,
+                           textvariable=self.sustain_gap)
+        spin.grid(row=1, column=3, sticky="w", padx=10, pady=(8, 0))
+        self._tip("sustain_gap", label, spin)
 
         self.lyric_source = tk.StringVar(
             value=saved.get("lyric_source", list(LYRIC_SOURCES)[0]))
-        ttk.Label(frame, text="Lyrics from").grid(row=2, column=0, sticky="w",
-                                                  pady=(8, 0))
-        ttk.Combobox(frame, textvariable=self.lyric_source,
-                     values=list(LYRIC_SOURCES), state="readonly",
-                     width=22).grid(row=2, column=1, sticky="w", padx=10, pady=(8, 0))
+        label = ttk.Label(frame, text="Lyrics from")
+        label.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        combo = ttk.Combobox(frame, textvariable=self.lyric_source,
+                             values=list(LYRIC_SOURCES), state="readonly", width=22)
+        combo.grid(row=2, column=1, sticky="w", padx=10, pady=(8, 0))
+        self._tip("lyric_source", label, combo)
 
         self.model = tk.StringVar(value=saved.get("model", list(MODELS)[0]))
-        ttk.Label(frame, text="Neural checkpoint").grid(row=3, column=0, sticky="w",
-                                                        pady=(8, 0))
-        ttk.Combobox(frame, textvariable=self.model, values=list(MODELS),
-                     state="readonly", width=22).grid(row=3, column=1, sticky="w",
-                                                      padx=10, pady=(8, 0))
+        label = ttk.Label(frame, text="Neural checkpoint")
+        label.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        combo = ttk.Combobox(frame, textvariable=self.model, values=list(MODELS),
+                             state="readonly", width=22)
+        combo.grid(row=3, column=1, sticky="w", padx=10, pady=(8, 0))
+        self._tip("model", label, combo)
         ttk.Label(frame, text="(only used by the neural source)",
                   foreground=MUTED).grid(row=3, column=2, columnspan=2, sticky="w",
                                          pady=(8, 0))

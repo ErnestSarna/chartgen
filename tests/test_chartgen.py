@@ -1264,6 +1264,48 @@ def test_solo_scoring_rewards_the_standout_and_stays_quiet_otherwise():
                for _, _, zz in cands)
 
 
+def test_tap_phrases_need_soft_runs_and_respect_the_share_cap():
+    from chartgen import taps
+
+    res = RESOLUTION
+    notes = [(i * res // 2, i % 5, 0) for i in range(60)]  # 8ths, 60 notes
+    ticks = [t for t, _, _ in notes]
+
+    # A soft island shorter than MIN_RUN never taps; a long one does, whole.
+    soft = {t: -1.0 for t in ticks}
+    for t in ticks[10:10 + taps.MIN_RUN - 1]:
+        soft[t] = 1.5
+    assert taps.phrases(notes, soft, res) == set()
+
+    for t in ticks[20:36]:
+        soft[t] = 1.5
+    got = taps.phrases(notes, soft, res)
+    assert got == set(ticks[20:36]), "the full soft run should tap"
+
+    # A gap wider than MAX_GAP_BEATS splits a run; the halves stand alone.
+    notes2 = [(i * res * 2, 0, 0) for i in range(20)]  # half notes: 2-beat gaps
+    soft2 = {t: 1.5 for t, _, _ in notes2}
+    assert taps.phrases(notes2, soft2, res) == set(),         "notes too far apart never form a tapped phrase"
+
+    # Share cap: when everything reads soft, most of the chart must stay
+    # strummed - tapping it all would just change instruments.
+    soft3 = {t: 1.5 for t in ticks}
+    got = taps.phrases(notes, soft3, res)
+    assert len(got) <= taps.MAX_SHARE * len(ticks) + 1, len(got)
+
+
+def test_tap_markers_written_only_where_the_tier_keeps_the_note():
+    from chartgen.chart import _tier_block
+
+    notes = [(0, 0, 0), (480, 1, 0), (960, 2, 0)]
+    block = _tier_block("HardSingle", notes, [], taps={480, 5000})
+    assert "480 = N 6 0" in block, "tap marker missing at a kept note"
+    assert "5000 = N 6 0" not in block, "bare tap marker with no note is dead weight"
+    # The modifier and its note share a tick and both survive sorting.
+    lines = [l.strip() for l in block.splitlines() if "480" in l]
+    assert "480 = N 1 0" in lines and "480 = N 6 0" in lines
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

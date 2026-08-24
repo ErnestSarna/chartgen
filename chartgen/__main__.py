@@ -106,6 +106,14 @@ def build_args(argv):
                          "fret choice was a +/-1 walk — every 16th HOPOed — but "
                          "pitch-based frets repeat notes, and same-fret pairs "
                          "never HOPO, so the saturation problem is gone")
+    ap.add_argument("--taps", action=argparse.BooleanOptionalAction, default=False,
+                    help="EXPERIMENTAL: mark soft phrases (piano lines, "
+                         "plucks, gentle synth runs) as tap notes, which "
+                         "play without strumming. Off by default: no "
+                         "charting standard defines tap usage, and measured "
+                         "against human charts the community itself only "
+                         "half-agrees (taps lean darker-timbred 2:1, but "
+                         "attack softness is a coin flip)")
     ap.add_argument("--no-solos", action="store_true",
                     help="skip solo markers (detected as busy instrumental "
                          "breaks in songs that otherwise have vocals)")

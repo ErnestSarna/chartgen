@@ -396,6 +396,11 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
                 getattr(opts, "lyric_source", "auto"), progress, y, sr)
         except Exception as error:  # lyrics are a nice-to-have, never fatal
             progress(f"      lyrics skipped: {type(error).__name__}: {error}")
+    tap_ticks = set()
+    if getattr(opts, "taps", False):
+        from . import taps as tapsmod
+
+        tap_ticks = tapsmod.detect(expert, y, sr, tempo, progress)
     solo_phrases = ()
     if not getattr(opts, "no_solos", False):
         from . import solo as solomod
@@ -419,7 +424,8 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     chart_path = song_dir / "notes.chart"
     chart_path.write_text(
         chartio.write_chart(tiers, tempo, meta, audio_filename, star_power, events,
-                            lyrics=lyric_events, solos=solo_phrases),
+                            lyrics=lyric_events, solos=solo_phrases,
+                            taps=tap_ticks),
         encoding="utf-8",
     )
     from . import rating

@@ -192,9 +192,11 @@ class App:
         self.sections = tk.BooleanVar(value=saved.get("sections", True))
         self.hopos = tk.BooleanVar(value=saved.get("hopos", True))
         self.lyrics = tk.BooleanVar(value=saved.get("lyrics", True))
+        self.taps = tk.BooleanVar(value=saved.get("taps", False))
         for text, var in (("Sustains", self.sustains), ("Star power", self.star_power),
                           ("Sections", self.sections), ("HOPOs", self.hopos),
-                          ("Lyrics", self.lyrics)):
+                          ("Lyrics", self.lyrics),
+                          ("Taps (experimental)", self.taps)):
             ttk.Checkbutton(toggles, text=text, variable=var).pack(side="left", padx=(0, 14))
 
     def _build_actions(self):
@@ -300,6 +302,7 @@ class App:
             target_diff=(None if self.target_diff.get() == "Auto"
                          else int(self.target_diff.get())),
             lyrics=self.lyrics.get(),
+            taps=self.taps.get(),
             lyric_source=LYRIC_SOURCES.get(self.lyric_source.get(), "auto"),
             name=self.title.get().strip() or None,
             artist=self.artist.get().strip() or "Unknown",
@@ -472,6 +475,7 @@ class App:
             "target_diff": self.target_diff.get(), "lyrics": self.lyrics.get(),
             "engine": self.engine.get(),
             "lyric_source": self.lyric_source.get(),
+            "taps": self.taps.get(),
         }
 
     def _on_close(self):

@@ -10,17 +10,20 @@ Note = tuple[int, int, int]  # (tick, lane, sustain_ticks); lane 7 is an open no
 
 
 def _tier_block(name: str, notes: list[Note], star_power: list[tuple[int, int]],
-                solos: list[tuple[int, int]] = ()) -> str:
-    """One difficulty track. Star power and solos are per-track in .chart, so
-    they repeat in every block.
+                solos: list[tuple[int, int]] = (), taps: set[int] = frozenset()) -> str:
+    """One difficulty track. Star power, solos and tap markers are per-track
+    in .chart, so they repeat in every block.
 
     A phrase covering no notes in this tier is dropped: after reduction a
     phrase that survives into Easy may have had all its notes removed, and an
     empty phrase is unactivatable dead weight. Solo markers are the local
-    (unquoted) track-event form CH scores its solo bonus from.
+    (unquoted) track-event form CH scores its solo bonus from. A tap is note
+    value 6 at the same tick as the note it modifies — emitted only where
+    this tier still has a note, since a bare modifier is dead weight too.
     """
     ticks = {t for t, _, _ in notes}
     lines = [(t, 0, f"  {t} = N {lane} {sus}") for t, lane, sus in notes]
+    lines += [(t, 0, f"  {t} = N 6 0") for t in taps if t in ticks]
     lines += [
         (start, 1, f"  {start} = S 2 {length}")
         for start, length in star_power
@@ -57,6 +60,7 @@ def write_chart(
     events: list[tuple[int, str]] = (),
     lyrics: list[tuple[int, str]] = (),
     solos: list[tuple[int, int]] = (),
+    taps: set[int] = frozenset(),
 ) -> str:
     """Render a full .chart: real SyncTrack, sections, lyrics, every difficulty.
 
@@ -74,7 +78,7 @@ def write_chart(
         for tick, text, _ in sorted(merged, key=lambda e: (e[0], _event_rank(e[1]), e[2]))
     )
     blocks = "\n".join(
-        _tier_block(name, tiers[name], list(star_power), list(solos))
+        _tier_block(name, tiers[name], list(star_power), list(solos), set(taps))
         for name in TIERS if tiers.get(name)
     )
 

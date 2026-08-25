@@ -1313,6 +1313,28 @@ def test_tap_markers_written_only_where_the_tier_keeps_the_note():
     assert "480 = N 1 0" in lines and "480 = N 6 0" in lines
 
 
+def test_lrc_phrases_stay_on_screen_until_the_next_line():
+    """Playtest: lines vanished while their last word was still sung. A
+    phrase must close when the NEXT line begins (LRC line timing means
+    'displayed until then'), not a quarter-beat after its last word."""
+    from chartgen.lyrics import from_lines
+
+    t = steady(bpm=120.0, n=400)
+    lines = [(10.0, "first line of words here"), (18.0, "second line"),
+             (26.0, "final line")]
+    events = from_lines(lines, t, duration_s=120.0)
+
+    ends = [tick for tick, e in events if e == "phrase_end"]
+    starts = [tick for tick, e in events if e == "phrase_start"]
+    res = t.resolution
+    # First phrase holds until just before the second line starts (18s at
+    # 120bpm = beat 36), not until shortly after its last word (~11s).
+    assert ends[0] >= int(17.0 * 2 * res), (ends[0], "closed too early")
+    assert ends[0] <= starts[1], "phrases must not overlap"
+    # The last line rings out rather than dying instantly.
+    assert ends[-1] >= int(27.0 * 2 * res)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

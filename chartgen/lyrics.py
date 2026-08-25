@@ -101,7 +101,14 @@ def _clean(word: str) -> str:
 
 
 def _phrases_to_events(phrases, tempo) -> list[tuple[int, str]]:
-    """[(tick, event)] for [(word_time, word), ...] groups, in reading order.
+    """[(tick, event)] for [(words, end_time), ...] groups, in reading order.
+
+    Each phrase is ([(word_time, word), ...], end_seconds). The end matters
+    as much as the start: CH clears the line at phrase_end, and the first
+    playtest of the LRC path closed phrases a quarter-beat after the LAST
+    WORD STARTED — lines vanished while their final word was still being
+    sung. A line stays up until its stated end (for LRC, the next line's
+    start; for Whisper, the segment's real end).
 
     Emission order is the output order: write_chart keeps it for events that
     land on the same tick, which is what stops a phrase from being scrambled
@@ -110,7 +117,7 @@ def _phrases_to_events(phrases, tempo) -> list[tuple[int, str]]:
     res = tempo.resolution
     events: list[tuple[int, str]] = []
     last_end = 0
-    for words in phrases:
+    for words, end_s in phrases:
         if not words:
             continue
         first = max(0, int(round(tempo.time_to_beat(words[0][0]) * res)))
@@ -123,7 +130,8 @@ def _phrases_to_events(phrases, tempo) -> list[tuple[int, str]]:
             # the line, and equal ticks stay in the order written here.
             tick = max(tick, int(round(tempo.time_to_beat(when) * res)))
             events.append((tick, f"lyric {text}"))
-        last_end = max(tick + res // 4, first + 1)
+        end_tick = int(round(tempo.time_to_beat(float(end_s)) * res)) if end_s else 0
+        last_end = max(end_tick, tick + res // 4, first + 1)
         events.append((last_end, "phrase_end"))
     return events
 
@@ -152,7 +160,10 @@ def from_lines(lines, tempo, duration_s: float) -> list[tuple[int, str]]:
         for word, weight in zip(words, weights):
             spread.append((min(at, start + span), word))
             at += span * weight / total
-        phrases.append(spread)
+        # The line is displayed until the next one starts (that is what LRC
+        # line timing MEANS); the last line rings out for its sung length.
+        end = (following - 0.1) if i + 1 < len(lines) else             min(duration_s, start + span + 1.5)
+        phrases.append((spread, end))
     return _phrases_to_events(phrases, tempo)
 
 
@@ -218,7 +229,7 @@ def transcribe(audio_path: str, tempo, progress=lambda m: None) -> list[tuple[in
         collected.append((float(segment.start), float(segment.end), words))
 
     collected = _drop_invented_tail(collected)
-    events = _phrases_to_events([w for _, _, w in collected], tempo)
+    events = _phrases_to_events([(w, end) for _, end, w in collected], tempo)
 
     count = sum(1 for _, e in events if e.startswith("lyric "))
     if not count:
@@ -228,6 +239,48 @@ def transcribe(audio_path: str, tempo, progress=lambda m: None) -> list[tuple[in
              f"{sum(1 for _, e in events if e == 'phrase_start')} phrases"
              f" (language: {info.language})")
     return events
+
+
+# A sheet can match on duration and still sit seconds off — Faded's LRCLIB
+# sync ran 3.1s early against our rip (216s audio vs the 213s cut it was
+# timed to), which played as lines vanishing before the singing started.
+# Grid-search the global shift that puts line starts on the audio's onsets;
+# apply it only when it clearly beats no shift, so a correct sheet is never
+# nudged by noise.
+ALIGN_RANGE_S = 6.0
+ALIGN_STEP_S = 0.05
+ALIGN_GAIN = 1.15
+
+
+def align_offset(lines, y, sr, duration_s: float) -> float:
+    """Global offset (seconds) that best lands line starts on onsets."""
+    import librosa
+    import numpy as np
+
+    starts = np.array([t for t, _ in lines], dtype=float)
+    if len(starts) < 8 or y is None or not len(y):
+        return 0.0
+    env = librosa.onset.onset_strength(y=y, sr=sr)
+    if env.max() <= 0:
+        return 0.0
+    env = env / env.max()
+    times = librosa.times_like(env, sr=sr)
+
+    def score(offset: float) -> float:
+        shifted = starts + offset
+        ok = (shifted >= 0) & (shifted <= duration_s)
+        if ok.sum() < 0.8 * len(starts):
+            return -1.0
+        idx = np.clip(np.searchsorted(times, shifted[ok]), 0, len(env) - 1)
+        return float(np.mean([env[max(0, i - 2):i + 3].max() for i in idx]))
+
+    base = score(0.0)
+    offsets = np.arange(-ALIGN_RANGE_S, ALIGN_RANGE_S + 1e-9, ALIGN_STEP_S)
+    scores = [score(o) for o in offsets]
+    best = float(offsets[int(np.argmax(scores))])
+    if base <= 0 or max(scores) < ALIGN_GAIN * base or abs(best) < 0.2:
+        return 0.0
+    return best
 
 
 # Share of synced lines that must land on audible audio. A sheet timed
@@ -267,6 +320,12 @@ def collect(audio_path, tempo, artist: str, title: str, duration_s: float,
         from . import lrclib
 
         lines = lrclib.find(artist, title, duration_s, progress=progress)
+        if lines and y is not None:
+            shift = align_offset(lines, y, sr, duration_s)
+            if shift:
+                progress(f"      synced lyrics shifted {shift:+.1f}s to match "
+                         f"this recording")
+                lines = [(max(0.0, t + shift), text) for t, text in lines]
         if lines and not _lands_on_sound(lines, y, sr):
             progress("      the synced lyrics do not line up with this audio; "
                      "transcribing instead")

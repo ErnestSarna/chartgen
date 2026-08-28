@@ -136,14 +136,83 @@ def _phrases_to_events(phrases, tempo) -> list[tuple[int, str]]:
     return events
 
 
-def from_lines(lines, tempo, duration_s: float) -> list[tuple[int, str]]:
+_ALIGNER = None
+
+
+def _load_aligner():
+    """torchaudio's MMS forced aligner: known text -> per-word times."""
+    global _ALIGNER
+    if _ALIGNER is None:
+        import torch
+        import torchaudio
+
+        bundle = torchaudio.pipelines.MMS_FA
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _ALIGNER = (bundle.get_model(with_star=False).to(device).eval(),
+                    bundle.get_tokenizer(), bundle.get_aligner(),
+                    bundle.sample_rate, device)
+    return _ALIGNER
+
+
+def align_words(lines, vocal, sr: int, duration_s: float,
+                progress=lambda m: None):
+    """Real per-word times for LRC lines, from the isolated vocal stem.
+
+    LRC syncs LINES; the word-by-word scroll inside each line was
+    synthetic and visibly wrong in play. We know the words (LRCLIB) and
+    where the singing physically is (the Demucs vocal stem); forced
+    alignment joins them. Per line: slice the stem over the line's
+    window, align that line's text, keep the emitted word starts.
+    Returns {line_index: [(seconds, word), ...]} for lines that aligned;
+    callers fall back to the spread for the rest.
+    """
+    import re as _re
+
+    import torch
+    import torchaudio
+
+    model, tokenizer, aligner, model_sr, device = _load_aligner()
+    wave = torch.from_numpy(vocal).to(device)
+    if sr != model_sr:
+        wave = torchaudio.functional.resample(wave, sr, model_sr)
+
+    aligned: dict[int, list] = {}
+    with torch.inference_mode():
+        for i, (start, text) in enumerate(lines):
+            words = [w for w in (_clean(part) for part in text.split()) if w]
+            tokens = [_re.sub(r"[^a-z']", "", w.lower()) for w in words]
+            if not words or any(not t for t in tokens):
+                continue
+            end = lines[i + 1][0] if i + 1 < len(lines) else                 min(duration_s, start + 12.0)
+            a = max(0, int((start - 0.25) * model_sr))
+            b = min(len(wave), int(end * model_sr))
+            if b - a < model_sr // 4:
+                continue
+            try:
+                emission, _ = model(wave[a:b].unsqueeze(0))
+                spans = aligner(emission[0], tokenizer(tokens))
+            except Exception:
+                continue
+            ratio = (b - a) / emission.shape[1] / model_sr
+            aligned[i] = [
+                (a / model_sr + span[0].start * ratio, word)
+                for span, word in zip(spans, words) if span
+            ]
+    progress(f"      {len(aligned)}/{len(lines)} lines word-aligned to the "
+             f"vocal stem")
+    return aligned
+
+
+def from_lines(lines, tempo, duration_s: float,
+               word_times: dict | None = None) -> list[tuple[int, str]]:
     """CH events from LRC lines: [(seconds, text)] with line-level timing.
 
-    LRC is synced per line, not per word, so words are spread across the line
-    at a plausible singing rate — weighted by length, because "the" is not
-    held as long as "shadow". The spread is capped so a line before a long
-    instrumental break does not crawl across it; the phrase timing, which is
-    what the player actually reads, comes straight from the human sync.
+    When forced alignment supplied real word times for a line
+    (word_times[i]), they are used as-is. Otherwise LRC is synced per
+    line, not per word, so words are spread across the line at a
+    plausible singing rate — weighted by length, because "the" is not
+    held as long as "shadow". The spread is capped so a line before a
+    long instrumental break does not crawl across it.
     """
     phrases = []
     for i, (start, text) in enumerate(lines):
@@ -151,15 +220,20 @@ def from_lines(lines, tempo, duration_s: float) -> list[tuple[int, str]]:
         if not words:
             continue
         following = lines[i + 1][0] if i + 1 < len(lines) else duration_s
-        room = max(0.3, following - start - 0.1)
-        # ~2.6 words/sec is an ordinary sung line; never overrun the gap.
-        span = min(room, 0.38 * len(words))
-        weights = [len(w) + 1 for w in words]
-        total = sum(weights)
-        at, spread = start, []
-        for word, weight in zip(words, weights):
-            spread.append((min(at, start + span), word))
-            at += span * weight / total
+        real = (word_times or {}).get(i)
+        if real and len(real) == len(words):
+            span = max(0.3, real[-1][0] - start)
+            spread = [(max(start, when), word) for when, word in real]
+        else:
+            room = max(0.3, following - start - 0.1)
+            # ~2.6 words/sec is an ordinary sung line; never overrun the gap.
+            span = min(room, 0.38 * len(words))
+            weights = [len(w) + 1 for w in words]
+            total = sum(weights)
+            at, spread = start, []
+            for word, weight in zip(words, weights):
+                spread.append((min(at, start + span), word))
+                at += span * weight / total
         # The line is displayed until the next one starts (that is what LRC
         # line timing MEANS); the last line rings out for its sung length.
         end = (following - 0.1) if i + 1 < len(lines) else             min(duration_s, start + span + 1.5)
@@ -331,7 +405,18 @@ def collect(audio_path, tempo, artist: str, title: str, duration_s: float,
                      "transcribing instead")
             lines = None
         if lines:
-            events = from_lines(lines, tempo, duration_s)
+            word_times = None
+            try:
+                from . import stems
+
+                mono = stems.separate(str(audio_path), progress)
+                if mono is not None:
+                    word_times = align_words(lines, mono["vocals"], stems.SR,
+                                             duration_s, progress)
+            except Exception as error:  # alignment is polish, never fatal
+                progress(f"      word alignment skipped: "
+                         f"{type(error).__name__}: {error}")
+            events = from_lines(lines, tempo, duration_s, word_times)
             progress(f"      {sum(1 for _, e in events if e.startswith('lyric '))}"
                      f" words in {len(lines)} synced lines")
             return events

@@ -39,3 +39,7 @@ mutagen==1.48.1
 # Lyric transcription -> CH lyric events (small model on GPU, base on CPU;
 # models download from HF on first use and cache).
 faster-whisper==1.2.1
+
+# Fluent/Win11 look for the Tkinter desktop app (pure Python, ~50 kB).
+# The app falls back to the stock theme if this is missing.
+sv-ttk==2.6.1

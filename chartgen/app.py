@@ -316,9 +316,10 @@ class App:
         self._tip("audio", label, entry)
         buttons = ttk.Frame(frame)
         buttons.grid(row=0, column=2)
+        ttk.Button(buttons, text="Browse…", command=self._pick_audio).pack(
+            side="left", padx=(0, 4))
         ttk.Button(buttons, text="Add", width=5,
-                   command=self._add_from_entry).pack(side="left", padx=(0, 4))
-        ttk.Button(buttons, text="Browse…", command=self._pick_audio).pack(side="left")
+                   command=self._add_from_entry).pack(side="left")
 
         # The queue ladder: every added file/link is a row here, and rows
         # disappear one by one as their song finishes — a per-song progress
@@ -474,9 +475,6 @@ class App:
                              state="readonly", width=22)
         combo.grid(row=3, column=1, sticky="w", padx=10, pady=(8, 0))
         self._tip("model", label, combo)
-        ttk.Label(frame, text="(only used by the neural source)",
-                  foreground=MUTED).grid(row=3, column=2, columnspan=2, sticky="w",
-                                         pady=(8, 0))
         frame.grid_remove()
 
     def _toggle_advanced(self, _event=None):

@@ -106,6 +106,11 @@ def build_args(argv):
                          "fret choice was a +/-1 walk — every 16th HOPOed — but "
                          "pitch-based frets repeat notes, and same-fret pairs "
                          "never HOPO, so the saturation problem is gone")
+    ap.add_argument("--opens", action=argparse.BooleanOptionalAction, default=True,
+                    help="open notes (the no-fret purple strum) for lone "
+                         "notes clearly below the melody - bass drops, "
+                         "chugs, pedal tones. 60%% of human charts use "
+                         "them; default on")
     ap.add_argument("--taps", action=argparse.BooleanOptionalAction, default=False,
                     help="EXPERIMENTAL: mark soft phrases (piano lines, "
                          "plucks, gentle synth runs) as tap notes, which "

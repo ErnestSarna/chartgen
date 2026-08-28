@@ -133,7 +133,8 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
         progress("[3/6] building Expert from transcription")
         expert = transcribe.expert_from_notes(
             events, tempo, subdiv=opts.subdiv,
-            min_sustain_beats=getattr(opts, 'min_sustain_beats', 0.5))
+            min_sustain_beats=getattr(opts, 'min_sustain_beats', 0.5),
+            allow_opens=getattr(opts, "opens", True))
         if getattr(opts, "density", "onset") == "onset":
             before = len({t for t, _, _ in expert})
             expert = density.gate_by_onsets(expert, y, sr, tempo)

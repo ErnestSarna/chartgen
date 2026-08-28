@@ -204,6 +204,10 @@ TIPS = {
              "the rest of the song. Deliberately conservative: most songs "
              "get none (70% of human charts have none either); a marker "
              "that does appear is almost always a real lead break.",
+    "opens": "The no-fret purple strum: lone notes clearly below the "
+             "melody - bass drops, chugs, pedal tones - play as a bare "
+             "strum with no button held. 60% of human charts use them as "
+             "punctuation.",
     "taps": "Marks soft phrases - piano lines, plucks, gentle synth runs - "
             "as tap notes, playable without strumming. Off by default: "
             "it's a stylistic choice, and human charters only half-agree "
@@ -358,6 +362,7 @@ class App:
         self.lyrics = tk.BooleanVar(value=saved.get("lyrics", True))
         self.taps = tk.BooleanVar(value=saved.get("taps", False))
         self.solos = tk.BooleanVar(value=saved.get("solos", True))
+        self.opens = tk.BooleanVar(value=saved.get("opens", True))
         for text, var, key in (
                 ("Sustains", self.sustains, "sustains"),
                 ("Star power", self.star_power, "star_power"),
@@ -365,6 +370,7 @@ class App:
                 ("HOPOs", self.hopos, "hopos"),
                 ("Lyrics", self.lyrics, "lyrics"),
                 ("Solos", self.solos, "solos"),
+                ("Opens", self.opens, "opens"),
                 ("Taps", self.taps, "taps")):
             box = ttk.Checkbutton(toggles, text=text, variable=var)
             box.pack(side="left", padx=(0, 14))
@@ -610,6 +616,7 @@ class App:
                          else int(self.target_diff.get())),
             lyrics=self.lyrics.get(),
             taps=self.taps.get(),
+            opens=self.opens.get(),
             no_solos=not self.solos.get(),
             lyric_source=LYRIC_SOURCES.get(self.lyric_source.get(), "auto"),
             name=meta_name,
@@ -785,6 +792,7 @@ class App:
             "lyric_source": self.lyric_source.get(),
             "taps": self.taps.get(),
             "solos": self.solos.get(),
+            "opens": self.opens.get(),
         }
 
     def _on_close(self):

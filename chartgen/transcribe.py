@@ -73,6 +73,7 @@ def expert_from_notes(
     min_pitch: int = MIN_PITCH,
     min_amplitude: float = MIN_AMPLITUDE,
     min_sustain_beats: float = 0.5,
+    allow_opens: bool = True,
 ) -> list[tuple[int, int, int]]:
     """Chart-ready Expert notes [(tick, lane, sustain_ticks)].
 
@@ -116,7 +117,7 @@ def expert_from_notes(
         loudest = group[0][0]
         group = [g for g in group if g[0] >= loudest * CHORD_AMPLITUDE_RATIO]
         lanes: dict[int, float] = {}
-        if len(group) == 1 and group[0][1] <= open_cut:
+        if allow_opens and len(group) == 1 and group[0][1] <= open_cut:
             # Lone low note: the purple strum. Never inside a chord - the
             # human corpus has 0.0% open+fret chords.
             lanes[OPEN] = group[0][2]

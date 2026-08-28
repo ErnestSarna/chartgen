@@ -430,7 +430,8 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         from . import solo as solomod
 
         solo_phrases = solomod.detect(expert, list(events), list(lyric_events),
-                                      y, sr, tempo, progress)
+                                      y, sr, tempo, progress,
+                                      audio_path=str(audio))
     progress(f"      {len(star_power)} star power phrase(s), {len(events)} section(s), "
              f"{len(solo_phrases)} solo(s), HOPOs {'on' if opts.hopos else 'off'}")
     check()

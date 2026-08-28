@@ -79,6 +79,15 @@ FEATURES = ("voiced", "confidence", "spread", "bright", "novelty")
 WEIGHTS = {"voiced": 0.5, "confidence": 0.0, "spread": 1.0,
            "bright": 0.0, "novelty": 1.0}
 MIN_Z = 1.25  # 0.5 standard deviations x the total weight of 2.5
+# Demucs "other"-stem energy, as a per-song z-score: the lead instrument
+# surging even when the full mix stays flat. Swept on 299 songs with stem
+# features (2026-08-25): adding it doubled true positives (22 -> 45) at
+# 66% precision / 10% recall, stable across ten half-splits (53-76%).
+# The stem singing-share feature earned nothing - the melodic features
+# already avoid sung sections - and stays out. With stems unavailable the
+# rule falls back to the full-mix score and threshold.
+LEAD_WEIGHT = 2.0
+MIN_Z_STEMS = 1.5
 MAX_SOLOS = 2           # human median is 1, max 3
 
 
@@ -218,8 +227,28 @@ def _candidates(spans, rows, resolution):
     return out
 
 
+def _lead_evidence(audio_path, progress):
+    """(times, rms, mean, std) from the Demucs other stem, or None."""
+    if not audio_path:
+        return None
+    try:
+        import numpy as np
+
+        from . import stems as stemsmod
+
+        mono = stemsmod.separate(str(audio_path), progress)
+        if mono is None:
+            return None
+        _, rms = stemsmod.activity(mono["other"])
+        times = (np.arange(len(rms)) + 0.5) * 0.05
+        mean, std = float(rms.mean()), float(rms.std()) or 1e-9
+        return times, rms, mean, std
+    except Exception:
+        return None
+
+
 def detect(expert, section_marks, lyric_events, y, sr, tempo,
-           progress=lambda m: None) -> list[tuple[int, int]]:
+           progress=lambda m: None, audio_path=None) -> list[tuple[int, int]]:
     """[(start_tick, end_tick)] where the audio carries a lead break.
 
     Returns nothing far more often than not, on purpose: 70% of human charts
@@ -242,6 +271,9 @@ def detect(expert, section_marks, lyric_events, y, sr, tempo,
     if rows is None:
         return []
 
+    lead = _lead_evidence(audio_path, progress)
+    threshold = MIN_Z_STEMS if lead else MIN_Z
+
     scored = []
     for start, end, z in _candidates(spans, rows, resolution):
         beats = (end - start) / resolution
@@ -257,7 +289,14 @@ def detect(expert, section_marks, lyric_events, y, sr, tempo,
         if len(inside) < 16:
             continue
         score = sum(WEIGHTS[k] * z[k] for k in FEATURES)
-        if score >= MIN_Z:
+        if lead:
+            times, rms, mean, std = lead
+            t0 = tempo.beat_to_time(start / resolution)
+            t1 = tempo.beat_to_time(end / resolution)
+            window = (times >= t0) & (times < t1)
+            if window.any():
+                score += LEAD_WEIGHT * (float(rms[window].mean()) - mean) / std
+        if score >= threshold:
             scored.append((score, inside[0], inside[-1]))
 
     if not scored:

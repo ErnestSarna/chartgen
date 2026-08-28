@@ -1,0 +1,148 @@
+"""Re-sweep the solo rule with Demucs stem evidence joined in.
+
+The full-mix rule plateaued at ~75% precision / ~5% recall, and the
+missed solos were invisible to full-mix features by any threshold. Stems
+add the two signals that were missing:
+
+- singing: true share of the section where the vocal stem is active
+  (replaces lyric-word counting, which calibration could never exercise
+  because human charts rarely embed lyrics);
+- lead: the "other" stem's energy as a per-song z-score - the lead
+  instrument surging even when the full mix stays flat.
+
+The position gate is deliberately re-opened in this sweep: it existed
+because full-mix features could not tell an intro riff from a solo, and
+Mary Jane's Last Dance - whose human chart marks solos at ~31% and ~85%
+of the song - is the named acceptance case.
+
+    python tools/sweep_solos_stems.py
+"""
+import itertools
+import json
+import random
+import statistics
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sweep_solos import zscores, iou
+
+WORK = Path(__file__).resolve().parent.parent / "work"
+FEATURES = ("voiced", "confidence", "spread", "bright", "novelty")
+
+
+def load_songs():
+    songs = [s for name in ("cal_solo_A.json", "cal_solo_B.json")
+             for s in json.loads((WORK / name).read_text(encoding="utf-8"))]
+    songs = list({s["name"]: s for s in songs}.values())
+    stems = {}
+    for name in ("cal_stems_A.json", "cal_stems_B.json"):
+        path = WORK / name
+        if path.exists():
+            for row in json.loads(path.read_text(encoding="utf-8")):
+                stems[row["name"]] = row["stem_sections"]
+    joined = []
+    for song in songs:
+        st = stems.get(song["name"])
+        if not st or len(st) != len(song["sections"]):
+            continue
+        for section, extra in zip(song["sections"], st):
+            section["stem"] = extra
+        if zscores(song["sections"]):
+            joined.append(song)
+    return joined
+
+
+def candidates(song, max_run=3):
+    sections = [s for s in song["sections"] if s.get("z") and s.get("stem")]
+    out = []
+    for i in range(len(sections)):
+        for run in range(1, max_run + 1):
+            group = sections[i:i + run]
+            if len(group) < run:
+                break
+            weights = [g["end"] - g["start"] for g in group]
+            total = sum(weights) or 1
+            out.append({
+                "start": group[0]["start"], "end": group[-1]["end"],
+                "notes": sum(g["notes"] for g in group),
+                "z": {k: sum(g["z"][k] * w for g, w in zip(group, weights)) / total
+                      for k in FEATURES},
+                "singing": sum(g["stem"]["singing"] * w
+                               for g, w in zip(group, weights)) / total,
+                "lead": sum(g["stem"]["lead"] * w
+                            for g, w in zip(group, weights)) / total,
+            })
+    return out
+
+
+def evaluate(songs, weights, lead_w, max_sing, min_beats, pos_lo, pos_hi,
+             threshold, top_k, min_iou=0.25):
+    tp = fp = fn = 0
+    for song in songs:
+        res, last = song["resolution"], song["last_tick"]
+        picks = []
+        for s in candidates(song):
+            beats = (s["end"] - s["start"]) / res
+            if not (min_beats <= beats <= 128):
+                continue
+            if not (pos_lo <= s["start"] / last <= pos_hi):
+                continue
+            if s["singing"] > max_sing or s["notes"] < 16:
+                continue
+            score = sum(weights[k] * s["z"][k] for k in FEATURES) \
+                + lead_w * s["lead"]
+            if score >= threshold:
+                picks.append((score, s["start"], s["end"]))
+        picks.sort(reverse=True)
+        chosen = []
+        for _, a, b in picks:
+            if all(b < c or a > d for c, d in chosen):
+                chosen.append((a, b))
+            if len(chosen) >= top_k:
+                break
+        truth = [tuple(t) for t in song["truth"]]
+        hits = [g for g in chosen if any(iou(g, t) >= min_iou for t in truth)]
+        tp += len(hits)
+        fp += len(chosen) - len(hits)
+        fn += sum(1 for t in truth if not any(iou(g, t) >= min_iou for g in chosen))
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f_half = (1.25 * precision * recall / (0.25 * precision + recall)) \
+        if precision + recall else 0.0
+    return {"precision": precision, "recall": recall, "f_half": f_half,
+            "tp": tp, "fp": fp}
+
+
+def main(argv=None):
+    songs = load_songs()
+    print(f"{len(songs)} songs with stem features, "
+          f"{sum(len(s['truth']) for s in songs)} solos\n")
+
+    base = {"voiced": 0.5, "confidence": 0, "spread": 1.0, "bright": 0.0,
+            "novelty": 1.0}
+    rows = []
+    for lead_w, max_sing in itertools.product((0, 0.5, 1.0, 1.5), (0.15, 0.25, 0.4, 1.0)):
+        for pos in ((0.45, 0.80), (0.25, 0.92), (0.10, 0.95)):
+            for z, k, mb in itertools.product((1.0, 1.25, 1.5, 2.0), (1, 2), (32, 48)):
+                r = evaluate(songs, base, lead_w, max_sing, mb, pos[0], pos[1], z, k)
+                r["rule"] = (f"lead{lead_w} sing<={max_sing} pos{pos[0]}-{pos[1]} "
+                             f"beats>={mb} z>={z} top{k}")
+                rows.append(r)
+
+    rows.sort(key=lambda r: -r["f_half"])
+    print("top by F0.5:")
+    for r in rows[:8]:
+        print(f"  {r['rule']:<52}{r['precision']:>5.0%}{r['recall']:>6.0%}  "
+              f"(tp{r['tp']} fp{r['fp']})")
+    print("\nprecision-first (recall >= 8%):")
+    good = [r for r in rows if r["recall"] >= 0.08]
+    for r in sorted(good, key=lambda r: (-r["precision"], -r["recall"]))[:8]:
+        print(f"  {r['rule']:<52}{r['precision']:>5.0%}{r['recall']:>6.0%}  "
+              f"(tp{r['tp']} fp{r['fp']})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

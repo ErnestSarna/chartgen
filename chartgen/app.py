@@ -319,9 +319,6 @@ class App:
         ttk.Button(buttons, text="Add", width=5,
                    command=self._add_from_entry).pack(side="left", padx=(0, 4))
         ttk.Button(buttons, text="Browse…", command=self._pick_audio).pack(side="left")
-        ttk.Label(frame, text="Paste one or more YouTube links (Enter or Add), or "
-                              "Browse for files — everything stacks below.",
-                  foreground=MUTED).grid(row=1, column=1, sticky="w", padx=10)
 
         # The queue ladder: every added file/link is a row here, and rows
         # disappear one by one as their song finishes — a per-song progress
@@ -360,7 +357,7 @@ class App:
         entry.grid(row=3, column=1, sticky="ew", padx=10, pady=(8, 0))
         self._tip("outdir", label, entry)
         ttk.Button(frame, text="Browse…", command=self._pick_outdir).grid(
-            row=3, column=2, pady=(8, 0))
+            row=3, column=2, sticky="w", pady=(8, 0))
         ttk.Label(frame, text="Tip: point this at your Clone Hero songs folder.",
                   foreground=MUTED).grid(row=4, column=1, sticky="w", padx=10)
 

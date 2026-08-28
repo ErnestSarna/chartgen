@@ -363,9 +363,10 @@ class App:
         self.taps = tk.BooleanVar(value=saved.get("taps", False))
         self.solos = tk.BooleanVar(value=saved.get("solos", True))
         self.opens = tk.BooleanVar(value=saved.get("opens", True))
-        # Two rows of four: a single row of eight outgrew the card and
-        # clipped the last toggle's label into an anonymous checkbox.
-        for i, (text, var, key) in enumerate((
+        # One row of eight fits only with tight spacing: the labels
+        # measure 618px and the card offers ~700, so 14px gaps clipped the
+        # last toggle's text into an anonymous checkbox.
+        for text, var, key in (
                 ("Sustains", self.sustains, "sustains"),
                 ("Star power", self.star_power, "star_power"),
                 ("Sections", self.sections, "sections"),
@@ -373,10 +374,9 @@ class App:
                 ("Lyrics", self.lyrics, "lyrics"),
                 ("Solos", self.solos, "solos"),
                 ("Opens", self.opens, "opens"),
-                ("Taps", self.taps, "taps"))):
+                ("Taps", self.taps, "taps")):
             box = ttk.Checkbutton(toggles, text=text, variable=var)
-            box.grid(row=i // 4, column=i % 4, sticky="w",
-                     padx=(0, 18), pady=(0 if i < 4 else 6, 0))
+            box.pack(side="left", padx=(0, 8))
             self._tip(key, box)
 
     def _build_advanced(self, saved):

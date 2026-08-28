@@ -343,11 +343,9 @@ class App:
         scroll.grid(row=0, column=1, sticky="ns")
         self.queue_box.bind("<Delete>", self._queue_remove)
         self.queue_box.bind("<Double-Button-1>", self._queue_remove)
-        Tooltip(self.queue_box, "Double-click or press Delete to remove a "
-                                "row. Songs chart oldest-first, so the "
-                                "ladder drains from the bottom.")
+        Tooltip(self.queue_box, "Double-click or press Delete to remove a row.")
         footer = ttk.Frame(self.queue_frame)
-        footer.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        footer.grid(row=1, column=0, sticky="w", pady=(8, 0))
         ttk.Button(footer, text="Clear", width=6,
                    command=self._queue_clear).pack(side="left", padx=(0, 10))
         self.queue_count = ttk.Label(footer, text="", foreground=MUTED)

@@ -168,8 +168,9 @@ class Tooltip:
 
 TIPS = {
     "audio": "A song file (mp3/flac/wav/ogg, 30s+), a YouTube link, or a "
-             "whole playlist link. Several at once each become their own "
-             "song folder.",
+             "whole playlist link. Paste several links at once - Enter or "
+             "Add stacks them in the queue below, and each becomes its own "
+             "song folder. The queue shrinks as songs finish.",
     "outdir": "Each song becomes its own folder here with notes.chart, "
               "audio and album art. Point it at your Clone Hero songs "
               "folder and new charts appear after a rescan.",
@@ -244,7 +245,6 @@ class App:
         self.root = root
         self.events: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
-        self.batch_files: list[str] = []
         self.batch_pos: tuple[int, int] | None = None
         self.cancel = threading.Event()
         self.result = None
@@ -312,23 +312,57 @@ class App:
         label.grid(row=0, column=0, sticky="w")
         entry = ttk.Entry(frame, textvariable=self.audio)
         entry.grid(row=0, column=1, sticky="ew", padx=10)
+        entry.bind("<Return>", self._add_from_entry)
         self._tip("audio", label, entry)
-        ttk.Button(frame, text="Browse…", command=self._pick_audio).grid(row=0, column=2)
-        ttk.Label(frame, text="Paste a YouTube link here to download and chart it.",
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=0, column=2)
+        ttk.Button(buttons, text="Add", width=5,
+                   command=self._add_from_entry).pack(side="left", padx=(0, 4))
+        ttk.Button(buttons, text="Browse…", command=self._pick_audio).pack(side="left")
+        ttk.Label(frame, text="Paste one or more YouTube links (Enter or Add), or "
+                              "Browse for files — everything stacks below.",
                   foreground=MUTED).grid(row=1, column=1, sticky="w", padx=10)
+
+        # The queue ladder: every added file/link is a row here, and rows
+        # disappear one by one as their song finishes — a per-song progress
+        # indicator on top of the stage bar. Hidden entirely when empty.
+        self.queue_items: list[str] = []
+        self.queue_frame = ttk.Frame(frame)
+        self.queue_frame.grid(row=2, column=1, sticky="ew", padx=10, pady=(6, 0))
+        self.queue_frame.columnconfigure(0, weight=1)
+        self.queue_box = tk.Listbox(
+            self.queue_frame, height=3, activestyle="none", relief="flat",
+            selectmode="extended", bg=LOG_BG, fg=LOG_FG,
+            highlightthickness=0, font=("Segoe UI", 9))
+        self.queue_box.grid(row=0, column=0, sticky="ew")
+        scroll = ttk.Scrollbar(self.queue_frame, orient="vertical",
+                               command=self.queue_box.yview)
+        self.queue_box.configure(yscrollcommand=scroll.set)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.queue_box.bind("<Delete>", self._queue_remove)
+        self.queue_box.bind("<Double-Button-1>", self._queue_remove)
+        footer = ttk.Frame(self.queue_frame)
+        footer.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        self.queue_count = ttk.Label(footer, text="", foreground=MUTED)
+        self.queue_count.pack(side="left")
+        ttk.Label(footer, text="   double-click or Del removes a row",
+                  foreground=MUTED, font=("Segoe UI", 8)).pack(side="left")
+        ttk.Button(footer, text="Clear", width=6,
+                   command=self._queue_clear).pack(side="left", padx=(10, 0))
+        self.queue_frame.grid_remove()
 
         # No artist/title fields: the pipeline fills them itself — YouTube
         # metadata for links, audio tags for files, filename as last resort.
         self.outdir = tk.StringVar(value=saved.get("outdir", str(Path("out").resolve())))
         label = ttk.Label(frame, text="Save to")
-        label.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        label.grid(row=3, column=0, sticky="w", pady=(8, 0))
         entry = ttk.Entry(frame, textvariable=self.outdir)
-        entry.grid(row=2, column=1, sticky="ew", padx=10, pady=(8, 0))
+        entry.grid(row=3, column=1, sticky="ew", padx=10, pady=(8, 0))
         self._tip("outdir", label, entry)
         ttk.Button(frame, text="Browse…", command=self._pick_outdir).grid(
-            row=2, column=2, pady=(8, 0))
+            row=3, column=2, pady=(8, 0))
         ttk.Label(frame, text="Tip: point this at your Clone Hero songs folder.",
-                  foreground=MUTED).grid(row=3, column=1, sticky="w", padx=10)
+                  foreground=MUTED).grid(row=4, column=1, sticky="w", padx=10)
 
     def _build_options(self, saved):
         """The choices that change what kind of chart you get."""
@@ -496,19 +530,69 @@ class App:
         self.open_button.pack(side="left")
 
     # ---------------------------------------------------------------- events
+    @staticmethod
+    def _display(item) -> str:
+        text = str(item)
+        return text if text.lower().startswith(("http", "www.")) else Path(text).name
+
+    def _add_from_entry(self, _event=None):
+        """Entry -> queue: one or more links (whitespace-separated) or a path."""
+        from . import youtube
+
+        text = self.audio.get().strip()
+        if not text:
+            return "break"
+        tokens = text.split()
+        if all(youtube.is_youtube_url(t) for t in tokens):
+            self._queue_add(tokens)
+        elif Path(text).is_file():
+            self._queue_add([text])
+        else:
+            messagebox.showerror(
+                "chartgen", f"Not a file or YouTube link:\n{text}")
+            return "break"
+        self.audio.set("")
+        return "break"
+
+    def _queue_add(self, items):
+        for item in items:
+            item = str(item)
+            if item not in self.queue_items:
+                self.queue_items.append(item)
+                self.queue_box.insert("end", f"  {self._display(item)}")
+        self._queue_refresh()
+
+    def _queue_remove(self, _event=None):
+        if self.worker and self.worker.is_alive():
+            return
+        for i in reversed(list(self.queue_box.curselection())):
+            self.queue_box.delete(i)
+            del self.queue_items[i]
+        self._queue_refresh()
+
+    def _queue_clear(self):
+        if self.worker and self.worker.is_alive():
+            return
+        self.queue_items.clear()
+        self.queue_box.delete(0, "end")
+        self._queue_refresh()
+
+    def _queue_refresh(self):
+        n = self.queue_box.size()
+        if n:
+            self.queue_frame.grid()
+            self.queue_box.configure(height=min(6, n))
+            self.queue_count.configure(
+                text=f"{n} song{'s' if n != 1 else ''} queued")
+        else:
+            self.queue_frame.grid_remove()
+
     def _pick_audio(self):
         paths = filedialog.askopenfilenames(
             title="Choose songs (at least 30 seconds each; multi-select works)",
             filetypes=[("Audio", "*.mp3 *.flac *.wav *.ogg *.opus *.m4a"), ("All", "*.*")])
-        if not paths:
-            return
-        if len(paths) == 1:
-            self.batch_files = []
-            self.audio.set(paths[0])
-        else:
-            # Batch: metadata comes from each file's own tags at run time.
-            self.batch_files = list(paths)
-            self.audio.set(f"{len(paths)} files selected")
+        if paths:
+            self._queue_add(paths)
 
     def _pick_outdir(self):
         path = filedialog.askdirectory(title="Where to save the song folder")
@@ -583,25 +667,23 @@ class App:
 
         from . import youtube
 
-        audio = self.audio.get().strip()
-        batch = list(self.batch_files) if audio.endswith("files selected") else []
-        # Several links can be pasted at once, space-separated; if every token
-        # is a YouTube URL, they queue like a file batch. Playlists expand in
-        # the worker (it needs the network).
-        tokens = audio.split()
-        if not batch and len(tokens) > 1 and all(map(youtube.is_youtube_url, tokens)):
-            batch = tokens
-        is_url = youtube.is_youtube_url(audio)
-        if not batch and (not audio or (not is_url and not Path(audio).is_file())):
+        # Anything still sitting in the entry joins the queue first.
+        if self.audio.get().strip():
+            self._add_from_entry()
+            if self.audio.get().strip():
+                return  # entry content was invalid; the error dialog showed
+        if not self.queue_items:
             messagebox.showerror(
                 "chartgen", "Choose audio file(s) or paste YouTube link(s) first.")
             return
+        batch = [i for i in self.queue_items] if len(self.queue_items) > 1 else []
+        audio = self.queue_items[0]
+        is_url = youtube.is_youtube_url(audio)
         meta_artist = meta_name = None
         if not batch and not is_url:
             asked = self._ask_metadata(Path(audio))
             if asked is None:
                 return  # user closed the prompt: don't chart
-            meta_artist, meta_name = asked
         save_settings(self._settings())
         base = Namespace(
             # URLs must stay strings; Path("https://…") collapses the //.
@@ -634,6 +716,7 @@ class App:
         self.cancel.clear()
         self.result = None
         self.batch_pos = None
+        self.queue_items = []
         self.started = time.monotonic()
         self.bar["value"] = 0
         self.bar["maximum"] = (7 if is_url else 6) * len(queue_items)
@@ -659,6 +742,9 @@ class App:
                     return
                 if len(items) != len(queue_items):
                     self.events.put(("max", (7 if is_url else 6) * len(items)))
+                # Playlists may have expanded: show the real ladder.
+                self.events.put(("queue_set",
+                                 [f"  {self._display(i)}" for i in items]))
                 def chart_one(item, position, total):
                     opts = copy.copy(base)
                     opts.audio = item
@@ -687,6 +773,10 @@ class App:
                             raise
                         self.events.put(("log", f"FAILED: {error}"))
                         retry.append(item)
+                    finally:
+                        # The ladder shrinks as each song finishes, whatever
+                        # its outcome — the log carries the verdicts.
+                        self.events.put(("item_done", None))
                 # Second chance for songs YouTube 403-blocked mid-batch; the
                 # throttle usually lifts while the rest of the queue charts.
                 if retry and not self.cancel.is_set():
@@ -724,6 +814,15 @@ class App:
                     self.bar["maximum"] = payload
                 elif kind == "song":
                     self.batch_pos = payload
+                elif kind == "queue_set":
+                    self.queue_box.delete(0, "end")
+                    for row in payload:
+                        self.queue_box.insert("end", row)
+                    self._queue_refresh()
+                elif kind == "item_done":
+                    if self.queue_box.size():
+                        self.queue_box.delete(0)
+                    self._queue_refresh()
                 elif kind == "log":
                     self._write(payload)
                     if payload.startswith("["):

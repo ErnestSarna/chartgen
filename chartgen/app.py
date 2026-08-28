@@ -261,7 +261,7 @@ class App:
         root.rowconfigure(9, weight=1)
 
         self._build_header()
-        self._section("Song", row=1)
+        self._section("Songs", row=1)
         self._build_input(saved)
         self._section("Options", row=3)
         self._build_options(saved)
@@ -325,6 +325,9 @@ class App:
         # disappear one by one as their song finishes — a per-song progress
         # indicator on top of the stage bar. Hidden entirely when empty.
         self.queue_items: list[str] = []
+        self.queue_labels: dict[str, str] = {}
+        self.run_items: list[str] = []
+        self.run_done = 0
         self.queue_frame = ttk.Frame(frame)
         self.queue_frame.grid(row=2, column=1, sticky="ew", padx=10, pady=(6, 0))
         self.queue_frame.columnconfigure(0, weight=1)
@@ -501,7 +504,7 @@ class App:
         self.stop.grid(row=0, column=1, padx=10)
         self.bar = ttk.Progressbar(frame, mode="determinate", maximum=6)
         self.bar.grid(row=0, column=2, sticky="ew", padx=10)
-        self.status = ttk.Label(frame, text="Ready", width=26, anchor="e",
+        self.status = ttk.Label(frame, text="Ready", anchor="e",
                                 foreground=MUTED)
         self.status.grid(row=0, column=3)
 
@@ -528,9 +531,10 @@ class App:
         self.open_button.pack(side="left")
 
     # ---------------------------------------------------------------- events
-    @staticmethod
-    def _display(item) -> str:
+    def _display(self, item) -> str:
         text = str(item)
+        if text in self.queue_labels:
+            return self.queue_labels[text]
         return text if text.lower().startswith(("http", "www.")) else Path(text).name
 
     def _add_from_entry(self, _event=None):
@@ -581,6 +585,7 @@ class App:
                 title = info.get("title")
                 if not title:
                     continue
+                link_key = link
                 if info.get("_type") == "playlist" or info.get("entries"):
                     count = len(list(info.get("entries") or []))
                     label = f"{title} (playlist, {count} songs)" if count                         else f"{title} (playlist)"
@@ -588,9 +593,18 @@ class App:
                     from . import youtube as yt
                     artist, name = yt.parse_title(title)
                     label = f"{artist} - {name}" if artist else title
-                self.events.put(("queue_title", (link, label)))
+                self.events.put(("queue_title", (link_key, label)))
             except Exception:
                 continue
+
+    def _render_run_ladder(self):
+        """Rebuild the ladder from the in-flight batch: remaining items,
+        newest-first, titles where known."""
+        remaining = self.run_items[self.run_done:]
+        self.queue_box.delete(0, "end")
+        for item in reversed(remaining):
+            self.queue_box.insert("end", f"  {self._display(item)}")
+        self._queue_refresh()
 
     def _queue_remove(self, _event=None):
         if self.worker and self.worker.is_alive():
@@ -773,8 +787,7 @@ class App:
                 if len(items) != len(queue_items):
                     self.events.put(("max", (7 if is_url else 6) * len(items)))
                 # Playlists may have expanded: show the real ladder.
-                self.events.put(("queue_set",
-                                 [f"  {self._display(i)}" for i in items]))
+                self.events.put(("queue_set", [str(i) for i in items]))
                 def chart_one(item, position, total):
                     opts = copy.copy(base)
                     opts.audio = item
@@ -845,23 +858,30 @@ class App:
                 elif kind == "song":
                     self.batch_pos = payload
                 elif kind == "queue_set":
-                    self.queue_box.delete(0, "end")
-                    for row in payload:  # worker order; display newest-first
-                        self.queue_box.insert(0, row)
-                    self._queue_refresh()
+                    self.run_items = list(payload)
+                    self.run_done = 0
+                    unknown = [i for i in self.run_items
+                               if str(i).lower().startswith(("http", "www."))
+                               and str(i) not in self.queue_labels]
+                    if unknown:
+                        threading.Thread(target=self._resolve_titles,
+                                         args=(unknown,), daemon=True).start()
+                    self._render_run_ladder()
                 elif kind == "queue_title":
                     link, label = payload
-                    needle = f"  {self._display(link)}"
-                    rows = self.queue_box.get(0, "end")
-                    for i, row in enumerate(rows):
-                        if row == needle:
-                            self.queue_box.delete(i)
-                            self.queue_box.insert(i, f"  {label}")
-                            break
+                    self.queue_labels[str(link)] = label
+                    if self.worker and self.worker.is_alive():
+                        self._render_run_ladder()
+                    else:
+                        needle = f"  {link}"
+                        for i, row in enumerate(self.queue_box.get(0, "end")):
+                            if row == needle:
+                                self.queue_box.delete(i)
+                                self.queue_box.insert(i, f"  {label}")
+                                break
                 elif kind == "item_done":
-                    if self.queue_box.size():
-                        self.queue_box.delete(self.queue_box.size() - 1)
-                    self._queue_refresh()
+                    self.run_done += 1
+                    self._render_run_ladder()
                 elif kind == "log":
                     self._write(payload)
                     if payload.startswith("["):

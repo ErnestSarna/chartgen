@@ -328,25 +328,30 @@ class App:
         self.queue_frame = ttk.Frame(frame)
         self.queue_frame.grid(row=2, column=1, sticky="ew", padx=10, pady=(6, 0))
         self.queue_frame.columnconfigure(0, weight=1)
+        # Fixed height: the dark box spans the scroller's full run instead
+        # of shrinking to one centred sliver on short queues. Newest entries
+        # display at the TOP; processing stays first-added-first, so the
+        # ladder drains from the bottom.
         self.queue_box = tk.Listbox(
-            self.queue_frame, height=3, activestyle="none", relief="flat",
+            self.queue_frame, height=4, activestyle="none", relief="flat",
             selectmode="extended", bg=LOG_BG, fg=LOG_FG,
             highlightthickness=0, font=("Segoe UI", 9))
-        self.queue_box.grid(row=0, column=0, sticky="ew")
+        self.queue_box.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(self.queue_frame, orient="vertical",
                                command=self.queue_box.yview)
         self.queue_box.configure(yscrollcommand=scroll.set)
         scroll.grid(row=0, column=1, sticky="ns")
         self.queue_box.bind("<Delete>", self._queue_remove)
         self.queue_box.bind("<Double-Button-1>", self._queue_remove)
+        Tooltip(self.queue_box, "Double-click or press Delete to remove a "
+                                "row. Songs chart oldest-first, so the "
+                                "ladder drains from the bottom.")
         footer = ttk.Frame(self.queue_frame)
         footer.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ttk.Button(footer, text="Clear", width=6,
+                   command=self._queue_clear).pack(side="left", padx=(0, 10))
         self.queue_count = ttk.Label(footer, text="", foreground=MUTED)
         self.queue_count.pack(side="left")
-        ttk.Label(footer, text="   double-click or Del removes a row",
-                  foreground=MUTED, font=("Segoe UI", 8)).pack(side="left")
-        ttk.Button(footer, text="Clear", width=6,
-                   command=self._queue_clear).pack(side="left", padx=(10, 0))
         self.queue_frame.grid_remove()
 
         # No artist/title fields: the pipeline fills them itself — YouTube
@@ -550,19 +555,52 @@ class App:
         return "break"
 
     def _queue_add(self, items):
+        from . import youtube
+
+        fresh = []
         for item in items:
             item = str(item)
             if item not in self.queue_items:
                 self.queue_items.append(item)
-                self.queue_box.insert("end", f"  {self._display(item)}")
+                self.queue_box.insert(0, f"  {self._display(item)}")
+                if youtube.is_youtube_url(item):
+                    fresh.append(item)
         self._queue_refresh()
+        if fresh:
+            threading.Thread(target=self._resolve_titles, args=(fresh,),
+                             daemon=True).start()
+
+    def _resolve_titles(self, links):
+        """Fetch video titles so ladder rows read as songs, not URLs."""
+        import yt_dlp
+
+        options = {"quiet": True, "no_warnings": True, "extract_flat": True,
+                   "skip_download": True}
+        for link in links:
+            try:
+                with yt_dlp.YoutubeDL(options) as ydl:
+                    info = ydl.extract_info(link, download=False)
+                title = info.get("title")
+                if not title:
+                    continue
+                if info.get("_type") == "playlist" or info.get("entries"):
+                    count = len(list(info.get("entries") or []))
+                    label = f"{title} (playlist, {count} songs)" if count                         else f"{title} (playlist)"
+                else:
+                    from . import youtube as yt
+                    artist, name = yt.parse_title(title)
+                    label = f"{artist} - {name}" if artist else title
+                self.events.put(("queue_title", (link, label)))
+            except Exception:
+                continue
 
     def _queue_remove(self, _event=None):
         if self.worker and self.worker.is_alive():
             return
         for i in reversed(list(self.queue_box.curselection())):
             self.queue_box.delete(i)
-            del self.queue_items[i]
+            # Display is newest-first; the backing list is oldest-first.
+            del self.queue_items[len(self.queue_items) - 1 - i]
         self._queue_refresh()
 
     def _queue_clear(self):
@@ -576,7 +614,6 @@ class App:
         n = self.queue_box.size()
         if n:
             self.queue_frame.grid()
-            self.queue_box.configure(height=min(6, n))
             self.queue_count.configure(
                 text=f"{n} song{'s' if n != 1 else ''} queued")
         else:
@@ -811,12 +848,21 @@ class App:
                     self.batch_pos = payload
                 elif kind == "queue_set":
                     self.queue_box.delete(0, "end")
-                    for row in payload:
-                        self.queue_box.insert("end", row)
+                    for row in payload:  # worker order; display newest-first
+                        self.queue_box.insert(0, row)
                     self._queue_refresh()
+                elif kind == "queue_title":
+                    link, label = payload
+                    needle = f"  {self._display(link)}"
+                    rows = self.queue_box.get(0, "end")
+                    for i, row in enumerate(rows):
+                        if row == needle:
+                            self.queue_box.delete(i)
+                            self.queue_box.insert(i, f"  {label}")
+                            break
                 elif kind == "item_done":
                     if self.queue_box.size():
-                        self.queue_box.delete(0)
+                        self.queue_box.delete(self.queue_box.size() - 1)
                     self._queue_refresh()
                 elif kind == "log":
                     self._write(payload)

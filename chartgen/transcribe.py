@@ -27,6 +27,13 @@ MAX_CHORD = 2
 # charting the pad as a second button is what buried the EDM songs in chords
 # (41-54% of positions against a human 5-13%).
 CHORD_AMPLITUDE_RATIO = 0.65
+# Open notes (lane 7, the no-fret purple strum): 60% of human charts use
+# them, as PUNCTUATION - median 4.5% of positions, median run length 1,
+# never inside chords. Musically they are the register BELOW the melody:
+# bass drops, chugs, pedal tones. A lone note this many semitones under
+# the melodic body (p25 of kept pitches) becomes an open.
+OPEN = 7
+OPEN_GAP_SEMITONES = 5
 
 
 def transcribe(audio_path: str, progress=lambda m: None):
@@ -83,7 +90,12 @@ def expert_from_notes(
     if not kept:
         return []
 
-    fret_of = _fret_map(np.array([p for _, _, p, _ in kept], dtype=float))
+    pitches = np.array([p for _, _, p, _ in kept], dtype=float)
+    fret_of = _fret_map(pitches)
+    # Below this, a lone note is an open: clearly under the melodic body,
+    # not just at the bottom of it.
+    open_cut = min(float(np.percentile(pitches, 10)),
+                   float(np.percentile(pitches, 25)) - OPEN_GAP_SEMITONES)
 
     by_tick: dict[int, list[tuple[float, int, float]]] = {}
     for start, end, pitch, amp in kept:
@@ -104,21 +116,31 @@ def expert_from_notes(
         loudest = group[0][0]
         group = [g for g in group if g[0] >= loudest * CHORD_AMPLITUDE_RATIO]
         lanes: dict[int, float] = {}
-        for _, pitch, duration in group:
-            lane = fret_of(pitch)
-            lanes[lane] = max(lanes.get(lane, 0.0), duration)
+        if len(group) == 1 and group[0][1] <= open_cut:
+            # Lone low note: the purple strum. Never inside a chord - the
+            # human corpus has 0.0% open+fret chords.
+            lanes[OPEN] = group[0][2]
+        else:
+            for _, pitch, duration in group:
+                lane = fret_of(pitch)
+                lanes[lane] = max(lanes.get(lane, 0.0), duration)
 
-        for lane, duration in sorted(lanes.items()):
-            beats_held = tempo.time_to_beat(
-                tempo.beat_to_time(tick / res) + duration) - tick / res
-            sustain = 0
-            if beats_held >= min_sustain_beats:
-                sustain = min(int(beats_held * res) - release, cap)
-                limit = next_tick.get(tick)
-                if limit is not None:
-                    sustain = min(sustain, limit - tick - release)
-                if sustain < floor:
-                    sustain = 0
+        # One sustain for the whole position: chord members with different
+        # lengths are "disjoint chords", which human charts never write
+        # (median 0 per song; we accidentally wrote ~6) and the community
+        # scanner flags.
+        duration = max(lanes.values())
+        beats_held = tempo.time_to_beat(
+            tempo.beat_to_time(tick / res) + duration) - tick / res
+        sustain = 0
+        if beats_held >= min_sustain_beats:
+            sustain = min(int(beats_held * res) - release, cap)
+            limit = next_tick.get(tick)
+            if limit is not None:
+                sustain = min(sustain, limit - tick - release)
+            if sustain < floor:
+                sustain = 0
+        for lane in sorted(lanes):
             notes.append((tick, lane, max(0, sustain)))
     return notes
 

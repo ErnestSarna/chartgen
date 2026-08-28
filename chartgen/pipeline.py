@@ -272,7 +272,22 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     # charted as chords. Do this before the jump smoothing so it sees the
     # shapes that actually survive.
     if not getattr(opts, "keep_dense_chords", False):
+        from . import texture
+
         before = sum(1 for _, g in _group(expert).items() if len(g) > 1)
+        # Texture first, backstop second: smoothing shape flicker into
+        # honest same-shape runs is what lets chord riffs SURVIVE the
+        # rapid-change demotion (same-shape repeats were never the
+        # playability problem), and narrowing wide chords keeps the chord
+        # where the old rule deleted it.
+        expert = texture.smooth_chord_shapes(expert, res)
+        expert = texture.narrow_wide_chords(expert, res)
+        n_before = len({t for t, _, _ in expert})
+        expert = texture.consolidate_gallops(expert, res)
+        dropped = n_before - len({t for t, _, _ in expert})
+        if dropped:
+            progress(f"      rhythm: {dropped} one-off 16th fragment(s) "
+                     f"consolidated to eighths")
         expert = reduce.simplify_rapid_chords(expert, res)
         after = sum(1 for _, g in _group(expert).items() if len(g) > 1)
         if before > after:
@@ -401,6 +416,14 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         from . import taps as tapsmod
 
         tap_ticks = tapsmod.detect(expert, y, sr, tempo, progress)
+    if not getattr(opts, "keep_dense_chords", False) and events:
+        from . import texture
+
+        grown = texture.climax_chords(tiers["ExpertSingle"], list(events), res)
+        if len(grown) > len(tiers["ExpertSingle"]):
+            progress(f"      {len(grown) - len(tiers['ExpertSingle'])} section-entry "
+                     f"chord(s) grown to three notes")
+        tiers["ExpertSingle"] = grown
     solo_phrases = ()
     if not getattr(opts, "no_solos", False):
         from . import solo as solomod

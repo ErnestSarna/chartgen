@@ -1335,6 +1335,124 @@ def test_lrc_phrases_stay_on_screen_until_the_next_line():
     assert ends[-1] >= int(27.0 * 2 * res)
 
 
+def test_smooth_chord_shapes_unlocks_riffs_but_keeps_progressions():
+    from chartgen.texture import smooth_chord_shapes
+
+    res = RESOLUTION
+    # Jittering shapes half a beat apart: (0,2) (1,2) (0,2) (1,3) - all the
+    # same 2-note chord wobbling by one lane. Humans strum ONE shape.
+    notes = []
+    for i, shape in enumerate([(0, 2), (1, 2), (0, 2), (1, 3)]):
+        for lane in shape:
+            notes.append((i * res // 2, lane, 0))
+    out = smooth_chord_shapes(notes, res)
+    shapes = {}
+    for t, lane, _ in out:
+        shapes.setdefault(t, []).append(lane)
+    kinds = {tuple(sorted(v)) for v in shapes.values()}
+    assert kinds == {(0, 2)}, f"flicker should collapse to one shape: {kinds}"
+
+    # A real progression - anchor moves two lanes - is untouched.
+    notes = []
+    for i, shape in enumerate([(0, 2), (2, 4), (0, 2), (2, 4)]):
+        for lane in shape:
+            notes.append((i * res, lane, 0))
+    out = smooth_chord_shapes(notes, res)
+    shapes = {}
+    for t, lane, _ in out:
+        shapes.setdefault(t, []).append(lane)
+    assert {tuple(sorted(v)) for v in shapes.values()} == {(0, 2), (2, 4)}
+
+
+def test_narrow_wide_chords_only_when_rushed():
+    from chartgen.texture import narrow_wide_chords
+
+    res = RESOLUTION
+    # A wide chord right next to a different shape narrows to span 2.
+    rushed = [(0, 0, 0), (0, 4, 0), (res // 2, 1, 0), (res // 2, 2, 0)]
+    out = narrow_wide_chords(rushed, res)
+    first = sorted(l for t, l, _ in out if t == 0)
+    assert max(first) - min(first) <= 2, first
+
+    # The same wide chord isolated stays wide - an accent, not a problem.
+    lonely = [(0, 0, 0), (0, 4, 0), (4 * res, 2, 0)]
+    assert sorted(narrow_wide_chords(lonely, res)) == sorted(lonely)
+
+
+def test_consolidate_gallops_keeps_repeats_kills_oneoffs():
+    from chartgen.texture import consolidate_gallops
+
+    res = RESOLUTION
+    s16 = res // 4
+    # An isolated 16th-16th fragment in an otherwise-8th passage: the
+    # middle (off-eighth) note goes, restoring the pulse.
+    ticks = [0, res // 2, res, res + s16, res + 2 * s16, 2 * res, 3 * res]
+    notes = [(t, 0, 0) for t in ticks]
+    out = consolidate_gallops(notes, res)
+    assert (res + s16) not in {t for t, _, _ in out}, "one-off middle should go"
+
+    # The same figure repeating a bar later is a rhythm and stays whole.
+    notes = [(t, 0, 0) for t in ticks] +         [(t + 4 * res, 0, 0) for t in (res, res + s16, res + 2 * s16)]
+    out = consolidate_gallops(sorted(notes), res)
+    kept = {t for t, _, _ in out}
+    assert (res + s16) in kept and (5 * res + s16) in kept, "repeats must stay"
+
+
+def test_climax_chords_grow_sparingly_at_sections():
+    from chartgen.texture import climax_chords
+
+    res = RESOLUTION
+    # A 2-note chord sitting isolated right at a section entry grows to 3.
+    notes = [(0, 0, 0), (4 * res, 0, 240), (4 * res, 2, 240), (8 * res, 1, 0)]
+    out = climax_chords(notes, [(4 * res, "Chorus")], res)
+    grown = sorted(l for t, l, _ in out if t == 4 * res)
+    assert grown == [0, 1, 2], grown
+    # The new note inherits the chord's (uniform) sustain.
+    assert {sus for t, _, sus in out if t == 4 * res} == {240}
+
+    # No sections, no growth; and never more than the cap.
+    assert sorted(climax_chords(notes, [], res)) == sorted(notes)
+
+
+def test_low_lone_pitches_become_open_notes():
+    from chartgen.transcribe import expert_from_notes
+
+    t = steady(bpm=120.0, n=200)
+    # Melody around MIDI 60-72, plus lone low hits at 41 - an octave-plus
+    # below the melodic body. The low hits should come out as opens
+    # (lane 7), the melody as fretted lanes, and a low note that COINCIDES
+    # with a melody note must not form an open chord.
+    events = []
+    for i in range(24):
+        events.append((1.0 + i * 0.5, 1.2 + i * 0.5, 60 + (i % 12), 0.8))
+    for k in range(6):
+        events.append((1.25 + k * 2.0, 1.4 + k * 2.0, 41, 0.8))
+    notes = expert_from_notes(events, t, subdiv=4)
+    lanes_by_tick = {}
+    for tick, lane, _ in notes:
+        lanes_by_tick.setdefault(tick, set()).add(lane)
+    opens = [t2 for t2, ls in lanes_by_tick.items() if 7 in ls]
+    assert opens, "low lone notes should become opens"
+    assert all(ls == {7} for t2, ls in lanes_by_tick.items() if 7 in ls),         "opens must never be part of a chord"
+    fretted = [ls for ls in lanes_by_tick.values() if 7 not in ls]
+    assert fretted, "melody must stay fretted"
+
+
+def test_chord_sustains_are_uniform():
+    from chartgen.transcribe import expert_from_notes
+
+    t = steady(bpm=120.0, n=64)
+    # Two simultaneous pitches with different real durations: the chart
+    # chord must carry ONE sustain value, not a disjoint pair.
+    events = [(2.0, 4.0, 60, 0.9), (2.0, 2.4, 64, 0.9), (6.0, 6.1, 62, 0.9)]
+    notes = expert_from_notes(events, t, subdiv=4)
+    by_tick = {}
+    for tick, lane, sus in notes:
+        by_tick.setdefault(tick, []).append(sus)
+    chords = [v for v in by_tick.values() if len(v) > 1]
+    assert chords and all(len(set(v)) == 1 for v in chords), by_tick
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

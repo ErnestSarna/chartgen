@@ -1465,27 +1465,29 @@ def test_a_handful_of_hallucinated_words_is_not_lyrics():
     assert words < MIN_SONG_WORDS,         "a lone hallucinated word must fall below the song floor"
 
 
-def test_tap_sections_classify_absolutely_by_drums_share():
-    """Playtest (all-piano song): per-song z-scores split uniformly soft
-    notes around their own average and the share cap truncated by rank -
-    most notes untapped, boundaries arbitrary. Sections now classify by
-    ABSOLUTE drums-stem share: a drum-free section taps whole, a
-    percussive one not at all."""
-    from chartgen.taps import drums_share_by_span, SOFT_DRUMS_SHARE, PERC_DRUMS_SHARE
+def test_tap_sections_classify_by_foreground_dominance():
+    """Playtest verdict on the drums-share classifier: a backing beat
+    vetoed taps on a piano-led song ("the piano was pretty much always
+    main and there was like a snare to it"). Sections now classify by
+    the melodic stem's FOREGROUND share: piano-over-beat taps, a
+    band/vocal foreground does not."""
+    from chartgen.taps import (foreground_by_span, FOREGROUND_SOFT_SHARE,
+                               FOREGROUND_HARD_SHARE)
 
     sr = 44100
-    quiet = np.full(30 * sr, 0.001, dtype=np.float32)
+    quiet = np.full(30 * sr, 0.01, dtype=np.float32)
     loud = np.full(30 * sr, 0.3, dtype=np.float32)
-    # First 30s: no drums (piano). Last 30s: drums pounding.
+    # First 30s: piano over a modest beat (other dominates regardless).
+    # Last 30s: full band, melodic stem just one voice among four.
     mono = {
-        "drums": np.concatenate([quiet * 0, loud]),
-        "bass": np.concatenate([quiet * 20, loud]),
-        "other": np.concatenate([loud, loud]),
-        "vocals": np.concatenate([quiet, quiet]),
+        "drums": np.concatenate([quiet * 8, loud]),
+        "bass": np.concatenate([quiet, loud]),
+        "other": np.concatenate([loud, loud * 0.8]),
+        "vocals": np.concatenate([quiet * 0, loud]),
     }
-    shares = drums_share_by_span([(0.0, 30.0), (30.0, 60.0)], mono, sr)
-    assert shares[0] < SOFT_DRUMS_SHARE, shares
-    assert shares[1] > PERC_DRUMS_SHARE, shares
+    fg = foreground_by_span([(0.0, 30.0), (30.0, 60.0)], mono, sr)
+    assert fg[0][0] >= FOREGROUND_SOFT_SHARE, fg
+    assert fg[1][0] <= FOREGROUND_HARD_SHARE, fg
 
 
 if __name__ == "__main__":

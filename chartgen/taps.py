@@ -44,15 +44,21 @@ MAX_GAP_BEATS = 1.0
 # arbitrary places while the piano never changed character.
 MAX_SHARE = 0.40
 
-# Absolute section texture from the Demucs drums stem, measured across
-# calibration genres: acoustic/piano material sits at 0.00-0.04 drums
-# share, a brushed ballad at 0.16, every full-band/electronic track at
-# 0.24-0.45. Below SOFT the whole section taps; above PERC none of it
-# does; between, the phrase logic decides - computed on DE-DRUMMED audio,
-# because full-mix features made a soft piano note inherit the attack of
-# whatever drum hit coincided with it.
-SOFT_DRUMS_SHARE = 0.10
-PERC_DRUMS_SHARE = 0.22
+# Section texture follows the FOREGROUND, not the backing. Drums-share
+# classification failed its first playtest for a reason the player named
+# exactly: "the piano was pretty much always main and there was like a
+# snare to it" - a backing beat vetoed taps on a piano-led song. The
+# chart follows the loudest melodic content, so the tap decision judges
+# THAT instrument: the Demucs other-stem share of section energy (where
+# piano/synth/guitar live). Measured on the three-song test matrix:
+# Luv Letter 0.62-0.99 in every section, In the End piano intro
+# 0.83-0.86 vs band 0.14-0.22, Clocks verses 0.31-0.44 (genuinely
+# shared foreground). The centroid guard keeps a DISTORTED lead - other-
+# dominant but harsh - from reading as soft: soft sections measured
+# 700-1600 Hz, noise/harsh 4400+.
+FOREGROUND_SOFT_SHARE = 0.60   # other-stem dominance: section taps whole
+FOREGROUND_HARD_SHARE = 0.35   # below: band/vocal foreground, no taps
+SOFT_MAX_CENTROID_HZ = 2500.0
 
 
 def _samples(feature, times, when):
@@ -141,8 +147,13 @@ def phrases(notes, softness: dict[int, float], resolution: int,
     return chosen
 
 
-def drums_share_by_span(spans_s, mono, sr) -> list:
-    """Drums-stem share of total stem energy per (t0, t1) span."""
+def foreground_by_span(spans_s, mono, sr, centroid=None, cen_times=None):
+    """[(other_share, other_centroid_hz)] per (t0, t1) span.
+
+    other_share = the melodic-instrument stem's share of total stem
+    energy; the centroid of that stem says whether the foreground is
+    soft (piano/pluck) or harsh (distorted lead).
+    """
     hop = int(0.05 * sr)
     envs = {}
     for name, stem in mono.items():
@@ -154,7 +165,12 @@ def drums_share_by_span(spans_s, mono, sr) -> list:
         a = max(0, min(frames - 1, int(t0 / 0.05)))
         b = max(a + 1, min(frames, int(t1 / 0.05)))
         total = sum(float(env[a:b].mean()) for env in envs.values())
-        out.append(float(envs["drums"][a:b].mean()) / total if total > 0 else 0.0)
+        share = float(envs["other"][a:b].mean()) / total if total > 0 else 0.0
+        bright = 0.0
+        if centroid is not None:
+            w = (cen_times >= t0) & (cen_times < t1)
+            bright = float(centroid[w].mean()) if w.any() else 0.0
+        out.append((share, bright))
     return out
 
 
@@ -162,13 +178,12 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
            audio_path=None, section_marks=None) -> set[int]:
     """Tap ticks for this chart, or an empty set when nothing reads soft.
 
-    Two-level decision. Sections classify ABSOLUTELY by their drums-stem
-    share: a section with next to no percussion taps whole (a piano
-    passage IS a tap texture), a percussive section never taps, and only
-    genuinely mixed sections fall through to the phrase logic - which
-    then runs on de-drummed audio so a note's softness is its own, not
-    the coinciding drum hit's. Without stems or sections the old
-    full-mix behaviour stands.
+    Two-level decision. Sections classify by their FOREGROUND: when the
+    melodic stem dominates the section (a piano-led passage, beat or no
+    beat) and reads soft, the whole section taps; when a band/vocal
+    foreground holds it, none of it does; genuinely shared foregrounds
+    fall through to the phrase logic on de-drummed audio. Without stems
+    or sections the old full-mix behaviour stands.
     """
     res = tempo.resolution
     ticks = sorted({t for t, _, _ in notes})
@@ -202,19 +217,25 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
     spans = list(zip(bounds, bounds[1:]))
     spans_s = [(tempo.beat_to_time(a / res), tempo.beat_to_time(b / res))
                for a, b in spans]
-    shares = drums_share_by_span(spans_s, mono, stemsmod.SR)
+    import librosa
+
+    other_ds = librosa.resample(mono["other"], orig_sr=stemsmod.SR,
+                                target_sr=22050)
+    centroid = librosa.feature.spectral_centroid(y=other_ds, sr=22050)[0]
+    cen_times = librosa.times_like(centroid, sr=22050)
+    fg = foreground_by_span(spans_s, mono, stemsmod.SR, centroid, cen_times)
 
     chosen: set[int] = set()
     mixed_notes = []
     soft_sections = 0
-    for (a, b), share in zip(spans, shares):
+    for (a, b), (share, bright) in zip(spans, fg):
         inside = [n for n in notes if a <= n[0] < b]
         if not inside:
             continue
-        if share < SOFT_DRUMS_SHARE:
+        if share >= FOREGROUND_SOFT_SHARE and bright <= SOFT_MAX_CENTROID_HZ:
             chosen.update(t for t, _, _ in inside)
             soft_sections += 1
-        elif share <= PERC_DRUMS_SHARE:
+        elif share > FOREGROUND_HARD_SHARE:
             mixed_notes.extend(inside)
 
     if mixed_notes:

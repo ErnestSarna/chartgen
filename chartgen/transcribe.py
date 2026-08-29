@@ -286,6 +286,120 @@ def _add_ornaments(notes, kept, tempo, fret_of, swing_beats, min_amplitude):
     return sorted(notes + picked) if picked else notes
 
 
+# Extended-sustain ladders: a held note keeps RINGING while higher lanes
+# join on top (G held, R joins, Y stacks - the community's "building
+# towards" idiom, the one sanctioned route to big chords). Library: 39% of
+# the 800 charts use them, 25% meaningfully; 75% of joins sit ABOVE the
+# held lane and 54% of joining notes are themselves sustained. Rate among
+# charts that use them: ~1.2 joins per 100 notes.
+LADDER_RATE_PER100 = 1.5      # cap just above the user-median rate
+LADDER_MIN_SPACING_BEATS = 4  # human ladder accents sit ~2 bars apart
+LADDER_MAX_HOLD_BEATS = 2.0
+LADDER_JOIN_WINDOW = (0.2, 1.05)  # joins land a 16th to a beat after the host
+
+
+def extend_ladders(notes, events, tempo,
+                   min_pitch: int = MIN_PITCH,
+                   min_amplitude: float = MIN_AMPLITUDE):
+    """Let evidence-backed holds ring through the notes that join them.
+
+    Everywhere else the pipeline CLAMPS a sustain at the next note. That
+    made the staircase the user kept asking for - green ringing while red
+    joins it - structurally impossible. The licence to overlap comes from
+    the transcription itself: Basic Pitch reports real durations, so a
+    note whose transcribed sound genuinely outlives the next onsets may
+    keep its tail. The host qualifies by its TRANSCRIBED duration, not its
+    charted sustain - the charted one was clamped at the next note and
+    floored to zero, which is precisely what happens to every real ladder
+    host (it rings 1.5 beats, something joins 0.25 later). Gates: the
+    transcribed duration must reach past the first
+    join, joins must sit on HIGHER lanes (the 75% norm - it also reads as
+    a build-up, not a smear), at most three lanes ring at once, the tail
+    stops a breath before the next note on the host's own lane, and
+    ladders stay rare and spread out like the accents they are. Expert
+    only - callers apply this after lower tiers are derived, because
+    Rock-Band-lineage reducers and reduced spacing both dislike overlaps.
+    """
+    if not notes or not events:
+        return notes, 0
+    res = tempo.resolution
+    by_tick: dict[int, list] = {}
+    for note in notes:
+        by_tick.setdefault(note[0], []).append(note)
+    ticks = sorted(by_tick)
+    n = len(ticks)
+
+    # Longest true (transcribed) ring-out per charted position, in ticks.
+    true_len: dict[int, int] = {}
+    for start, end, pitch, amp in events:
+        if pitch < min_pitch or amp < min_amplitude:
+            continue
+        tick = tempo.quantize(start, subdiv=4)
+        if tick not in by_tick:
+            continue
+        length = int((tempo.time_to_beat(end) - tick / res) * res)
+        if length > true_len.get(tick, 0):
+            true_len[tick] = length
+
+    next_on_lane: dict[int, dict[int, int]] = {}
+    lane_last: dict[int, int] = {}
+    for tick in reversed(ticks):
+        next_on_lane[tick] = dict(lane_last)
+        for _, lane, _ in by_tick[tick]:
+            lane_last[lane] = tick
+
+    budget = max(4, int(n * LADDER_RATE_PER100 / 100.0))
+    spacing = int(LADDER_MIN_SPACING_BEATS * res)
+    cap = int(LADDER_MAX_HOLD_BEATS * res)
+    gap = res // 8
+    lo, hi = (int(w * res) for w in LADDER_JOIN_WINDOW)
+
+    stretch: dict[tuple[int, int], int] = {}
+    last_ladder = -spacing
+    made = 0
+    for i, tick in enumerate(ticks):
+        if made >= budget or tick - last_ladder < spacing:
+            continue
+        group = by_tick[tick]
+        fretted = sorted((lane, sus) for _, lane, sus in group if lane != OPEN)
+        if not fretted:
+            continue
+        host_lane, host_sus = fretted[0]
+        truth = true_len.get(tick, 0)
+        if truth < (res * 3) // 4:
+            continue  # the sound itself is not hold-worthy
+        # joins: later positions inside the join window, strictly above the
+        # host lane, no opens, that the host's real sound rings through
+        joins = []
+        for j in range(i + 1, n):
+            jt = ticks[j]
+            if jt - tick > hi:
+                break
+            lanes = [l for _, l, _ in by_tick[jt]]
+            if jt - tick < lo or OPEN in lanes or min(lanes) <= host_lane:
+                continue
+            if truth >= (jt - tick) + res // 4:
+                joins.append(jt)
+            if len(joins) >= 2:  # host + two joins = three lanes ringing
+                break
+        if not joins:
+            continue
+        limit = next_on_lane[tick].get(host_lane)
+        new_sus = min(truth, cap, (limit - tick - gap) if limit else cap)
+        if new_sus < (joins[0] - tick) + res // 4:
+            continue  # the overlap would be too short to read as a ladder
+        if new_sus <= host_sus:
+            continue
+        stretch[(tick, host_lane)] = new_sus
+        last_ladder = tick
+        made += 1
+
+    if not stretch:
+        return notes, 0
+    out = [(t, l, stretch.get((t, l), s)) for t, l, s in notes]
+    return sorted(out), made
+
+
 def propagate_sustains(tiers: dict, expert_key: str = "ExpertSingle") -> dict:
     """Copy Expert's real sustains onto reduced tiers by tick (BP engine only;
     the audio2chart path derives sustains from gaps instead)."""

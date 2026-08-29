@@ -23,7 +23,11 @@ from chartgen.motifs import (  # noqa: E402
 )
 from chartgen.structure import unify_riff_bars  # noqa: E402
 from chartgen.tempo import RESOLUTION, TempoMap  # noqa: E402
-from chartgen.transcribe import expert_from_notes, swung_beats  # noqa: E402
+from chartgen.transcribe import (  # noqa: E402
+    expert_from_notes,
+    extend_ladders,
+    swung_beats,
+)
 
 RES = RESOLUTION  # 480
 
@@ -442,6 +446,64 @@ def test_ornament_quiet_onsets_ignored():
     orn = [tick for tick, _, _ in notes if tick % (RES // 8) == 0
            and tick % (RES // 4) != 0]
     assert not orn, "a quiet 32nd is a ghost, not evidence"
+
+
+# ---------------------------------------------------------------- ladders
+
+def _ladder_setup(t, host_ring_beats):
+    """Host G sustained at beat 4, R joins a 16th later, next G at beat 8.
+    The transcribed event for the host rings for host_ring_beats."""
+    beat = RES
+    notes = [(4 * beat, 0, beat // 2), (4 * beat + beat // 4, 1, beat // 2),
+             (6 * beat, 2, 0), (8 * beat, 0, 0)]
+    host_t = t.beat_to_time(4)
+    events = [(host_t, t.beat_to_time(4 + host_ring_beats), 50, 0.6),
+              (t.beat_to_time(4.25), t.beat_to_time(5), 55, 0.6)]
+    return notes, events
+
+
+def test_ladder_extends_evidenced_hold_through_join():
+    t = steady()
+    notes, events = _ladder_setup(t, host_ring_beats=1.5)
+    out, made = extend_ladders(notes, events, t)
+    assert made == 1
+    host = sus_at(out, 4 * RES)
+    join_tick = 4 * RES + RES // 4
+    assert host > join_tick - 4 * RES, "host must ring past the join"
+    assert sus_at(out, join_tick) == RES // 2, "the join keeps its own hold"
+    # tail stops before the next note on the host's own lane at beat 8
+    assert 4 * RES + host < 8 * RES, out
+
+
+def test_ladder_needs_duration_evidence_and_a_higher_join():
+    t = steady()
+    # host sound stops before the join: no licence to overlap
+    notes, events = _ladder_setup(t, host_ring_beats=0.2)
+    out, made = extend_ladders(notes, events, t)
+    assert made == 0 and out == sorted(notes)
+    # join BELOW the held lane: not a build-up
+    beat = RES
+    notes = [(4 * beat, 2, beat // 2), (4 * beat + beat // 4, 0, 0),
+             (8 * beat, 2, 0)]
+    events = [(t.beat_to_time(4), t.beat_to_time(6), 60, 0.6)]
+    out, made = extend_ladders(notes, events, t)
+    assert made == 0
+
+
+def test_ladder_respects_budget_and_spacing():
+    t = steady()
+    beat = RES
+    notes = []
+    events = []
+    for k in range(6):  # six candidate ladders two beats apart
+        base = (4 + 2 * k) * beat
+        notes += [(base, 0, beat // 2), (base + beat // 4, 1, 0)]
+        events.append((t.beat_to_time(base / RES),
+                       t.beat_to_time(base / RES + 1.5), 50, 0.6))
+    out, made = extend_ladders(notes, events, t)
+    # 4-beat minimum spacing: of six candidates 2 beats apart, every
+    # other one ladders
+    assert made == 3, made
 
 
 # ---------------------------------------------------------------- writing

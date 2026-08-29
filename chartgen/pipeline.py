@@ -170,7 +170,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                      f"{opts.min_variety:.2f} (transcription is "
                      f"deterministic; retries would not change it)")
         return _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
-                             engine, audio, duration_s)
+                             engine, audio, duration_s, bp_events=events)
 
     progress(f"[2/6] loading {opts.model}")
     from .model import PitchCharter, load_charter
@@ -278,7 +278,7 @@ def _group(notes):
 
 
 def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
-                  engine, audio, duration_s) -> dict:
+                  engine, audio, duration_s, bp_events=None) -> dict:
     """Everything downstream of Expert-note production, shared by engines:
     difficulty target, reduction, expression, lyrics, art, rating, writing."""
     res = tempo.resolution
@@ -514,6 +514,19 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             progress(f"      {len(grown) - len(tiers['ExpertSingle'])} section-entry "
                      f"chord(s) grown to three notes")
         tiers["ExpertSingle"] = grown
+    if (bp_events and not opts.no_sustains
+            and not getattr(opts, "no_motifs", False)):
+        from . import transcribe as transcribemod
+
+        # Extended-sustain ladders (a held lane rings while higher lanes
+        # join) go on Expert ONLY, after every tier is derived: reduced
+        # spacing dislikes overlaps, and the joins are Expert expression.
+        laddered, made = transcribemod.extend_ladders(
+            tiers["ExpertSingle"], bp_events, tempo)
+        if made:
+            tiers["ExpertSingle"] = laddered
+            progress(f"      {made} sustain ladder(s): a held note rings "
+                     f"while higher lanes join (39% of human charts)")
     solo_phrases = ()
     if not getattr(opts, "no_solos", False):
         from . import solo as solomod

@@ -1465,6 +1465,29 @@ def test_a_handful_of_hallucinated_words_is_not_lyrics():
     assert words < MIN_SONG_WORDS,         "a lone hallucinated word must fall below the song floor"
 
 
+def test_tap_sections_classify_absolutely_by_drums_share():
+    """Playtest (all-piano song): per-song z-scores split uniformly soft
+    notes around their own average and the share cap truncated by rank -
+    most notes untapped, boundaries arbitrary. Sections now classify by
+    ABSOLUTE drums-stem share: a drum-free section taps whole, a
+    percussive one not at all."""
+    from chartgen.taps import drums_share_by_span, SOFT_DRUMS_SHARE, PERC_DRUMS_SHARE
+
+    sr = 44100
+    quiet = np.full(30 * sr, 0.001, dtype=np.float32)
+    loud = np.full(30 * sr, 0.3, dtype=np.float32)
+    # First 30s: no drums (piano). Last 30s: drums pounding.
+    mono = {
+        "drums": np.concatenate([quiet * 0, loud]),
+        "bass": np.concatenate([quiet * 20, loud]),
+        "other": np.concatenate([loud, loud]),
+        "vocals": np.concatenate([quiet, quiet]),
+    }
+    shares = drums_share_by_span([(0.0, 30.0), (30.0, 60.0)], mono, sr)
+    assert shares[0] < SOFT_DRUMS_SHARE, shares
+    assert shares[1] > PERC_DRUMS_SHARE, shares
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

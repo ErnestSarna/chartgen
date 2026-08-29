@@ -416,7 +416,9 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     if getattr(opts, "taps", False):
         from . import taps as tapsmod
 
-        tap_ticks = tapsmod.detect(expert, y, sr, tempo, progress)
+        tap_ticks = tapsmod.detect(expert, y, sr, tempo, progress,
+                                   audio_path=str(audio),
+                                   section_marks=list(events))
     if not getattr(opts, "keep_dense_chords", False) and events:
         from . import texture
 

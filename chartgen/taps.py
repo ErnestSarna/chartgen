@@ -36,10 +36,23 @@ SOFT_Z = 0.25
 # A phrase: at least this many qualifying notes, no gap wider than this.
 MIN_RUN = 4
 MAX_GAP_BEATS = 1.0
-# Never tap more of the chart than this. Human charts that tap at all
-# put taps on a minority of positions; a mostly-tapped chart stops feeling
-# like guitar.
+# Never tap more of the chart than this - within MIXED sections only. A
+# uniformly soft song (a piano piece) taps whole, because playtest proved
+# the alternative: per-song z-scores on an all-piano song split the notes
+# around the song's own average and the 40% cap truncated by rank, so
+# most notes were not tapped and the boundaries fell at statistically
+# arbitrary places while the piano never changed character.
 MAX_SHARE = 0.40
+
+# Absolute section texture from the Demucs drums stem, measured across
+# calibration genres: acoustic/piano material sits at 0.00-0.04 drums
+# share, a brushed ballad at 0.16, every full-band/electronic track at
+# 0.24-0.45. Below SOFT the whole section taps; above PERC none of it
+# does; between, the phrase logic decides - computed on DE-DRUMMED audio,
+# because full-mix features made a soft piano note inherit the attack of
+# whatever drum hit coincided with it.
+SOFT_DRUMS_SHARE = 0.10
+PERC_DRUMS_SHARE = 0.22
 
 
 def _samples(feature, times, when):
@@ -128,15 +141,98 @@ def phrases(notes, softness: dict[int, float], resolution: int,
     return chosen
 
 
-def detect(notes, y, sr, tempo, progress=lambda m: None) -> set[int]:
-    """Tap ticks for this chart, or an empty set when nothing reads soft."""
-    try:
-        soft = softness_by_tick(notes, y, sr, tempo)
-    except Exception as error:  # decoration, never worth failing a chart
-        progress(f"      tap detection skipped: {type(error).__name__}: {error}")
+def drums_share_by_span(spans_s, mono, sr) -> list:
+    """Drums-stem share of total stem energy per (t0, t1) span."""
+    hop = int(0.05 * sr)
+    envs = {}
+    for name, stem in mono.items():
+        n = len(stem) // hop
+        envs[name] = np.sqrt((stem[:n * hop].reshape(n, hop) ** 2).mean(axis=1))
+    frames = len(next(iter(envs.values())))
+    out = []
+    for t0, t1 in spans_s:
+        a = max(0, min(frames - 1, int(t0 / 0.05)))
+        b = max(a + 1, min(frames, int(t1 / 0.05)))
+        total = sum(float(env[a:b].mean()) for env in envs.values())
+        out.append(float(envs["drums"][a:b].mean()) / total if total > 0 else 0.0)
+    return out
+
+
+def detect(notes, y, sr, tempo, progress=lambda m: None,
+           audio_path=None, section_marks=None) -> set[int]:
+    """Tap ticks for this chart, or an empty set when nothing reads soft.
+
+    Two-level decision. Sections classify ABSOLUTELY by their drums-stem
+    share: a section with next to no percussion taps whole (a piano
+    passage IS a tap texture), a percussive section never taps, and only
+    genuinely mixed sections fall through to the phrase logic - which
+    then runs on de-drummed audio so a note's softness is its own, not
+    the coinciding drum hit's. Without stems or sections the old
+    full-mix behaviour stands.
+    """
+    res = tempo.resolution
+    ticks = sorted({t for t, _, _ in notes})
+    if not ticks:
         return set()
-    chosen = phrases(notes, soft, tempo.resolution)
+
+    mono = None
+    if audio_path and section_marks:
+        try:
+            from . import stems as stemsmod
+
+            mono = stemsmod.separate(str(audio_path), progress)
+        except Exception:
+            mono = None
+
+    if mono is None or not section_marks:
+        try:
+            soft = softness_by_tick(notes, y, sr, tempo)
+        except Exception as error:  # decoration, never worth failing a chart
+            progress(f"      tap detection skipped: {type(error).__name__}: {error}")
+            return set()
+        chosen = phrases(notes, soft, res)
+        if chosen:
+            share = len(chosen) / max(1, len(ticks))
+            progress(f"      taps: {len(chosen)} notes ({share:.0%}) in soft phrases")
+        return chosen
+
+    from . import stems as stemsmod
+
+    bounds = [t for t, _ in sorted(section_marks)] + [ticks[-1] + 1]
+    spans = list(zip(bounds, bounds[1:]))
+    spans_s = [(tempo.beat_to_time(a / res), tempo.beat_to_time(b / res))
+               for a, b in spans]
+    shares = drums_share_by_span(spans_s, mono, stemsmod.SR)
+
+    chosen: set[int] = set()
+    mixed_notes = []
+    soft_sections = 0
+    for (a, b), share in zip(spans, shares):
+        inside = [n for n in notes if a <= n[0] < b]
+        if not inside:
+            continue
+        if share < SOFT_DRUMS_SHARE:
+            chosen.update(t for t, _, _ in inside)
+            soft_sections += 1
+        elif share <= PERC_DRUMS_SHARE:
+            mixed_notes.extend(inside)
+
+    if mixed_notes:
+        # De-drummed audio: the melodic content without the kit, resampled
+        # to the analysis rate the full-mix path used.
+        try:
+            import librosa
+
+            dedrummed = (mono["vocals"] + mono["other"] + mono["bass"])
+            dedrummed = librosa.resample(dedrummed, orig_sr=stemsmod.SR,
+                                         target_sr=sr)
+            soft = softness_by_tick(mixed_notes, dedrummed, sr, tempo)
+            chosen.update(phrases(mixed_notes, soft, res))
+        except Exception:
+            pass
+
     if chosen:
-        share = len(chosen) / max(1, len({t for t, _, _ in notes}))
-        progress(f"      taps: {len(chosen)} notes ({share:.0%}) in soft phrases")
+        share = len(chosen) / max(1, len(ticks))
+        progress(f"      taps: {len(chosen)} notes ({share:.0%}) - "
+                 f"{soft_sections} soft section(s) tapped whole")
     return chosen

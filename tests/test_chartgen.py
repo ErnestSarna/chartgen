@@ -1453,6 +1453,18 @@ def test_chord_sustains_are_uniform():
     assert chords and all(len(set(v)) == 1 for v in chords), by_tick
 
 
+def test_a_handful_of_hallucinated_words_is_not_lyrics():
+    """Playtest: an entirely-piano song carried a single 'you'. One lone
+    segment slips the tail guards (no gap precedes it, not boilerplate);
+    the whole-song word floor is what catches it."""
+    from chartgen.lyrics import MIN_SONG_WORDS, _drop_invented_tail
+
+    lone = [(95.0, 95.4, [(95.0, "you")])]
+    survived = _drop_invented_tail(lone)
+    words = sum(len(w) for _, _, w in survived)
+    assert words < MIN_SONG_WORDS,         "a lone hallucinated word must fall below the song floor"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

@@ -53,6 +53,11 @@ _BOILERPLATE = (
 # never a real closing line.
 ORPHAN_WORDS = 5
 ORPHAN_GAP_S = 5.0
+# A whole-song transcription this small is not singing at all: playtest
+# found an entirely-piano piece carrying a single hallucinated "you" -
+# one lone segment slips the tail guards (no gap before it, not
+# boilerplate), so the floor is the last line of defence.
+MIN_SONG_WORDS = 8
 
 _MODEL = None
 
@@ -306,7 +311,7 @@ def transcribe(audio_path: str, tempo, progress=lambda m: None) -> list[tuple[in
     events = _phrases_to_events([(w, end) for _, end, w in collected], tempo)
 
     count = sum(1 for _, e in events if e.startswith("lyric "))
-    if not count:
+    if count < MIN_SONG_WORDS:
         progress("      no vocals detected; skipping lyrics")
         return []
     progress(f"      {count} words in "

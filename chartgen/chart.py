@@ -10,7 +10,8 @@ Note = tuple[int, int, int]  # (tick, lane, sustain_ticks); lane 7 is an open no
 
 
 def _tier_block(name: str, notes: list[Note], star_power: list[tuple[int, int]],
-                solos: list[tuple[int, int]] = (), taps: set[int] = frozenset()) -> str:
+                solos: list[tuple[int, int]] = (), taps: set[int] = frozenset(),
+                forced: set[int] = frozenset()) -> str:
     """One difficulty track. Star power, solos and tap markers are per-track
     in .chart, so they repeat in every block.
 
@@ -20,10 +21,14 @@ def _tier_block(name: str, notes: list[Note], star_power: list[tuple[int, int]],
     (unquoted) track-event form CH scores its solo bonus from. A tap is note
     value 6 at the same tick as the note it modifies — emitted only where
     this tier still has a note, since a bare modifier is dead weight too.
+    Forced flags (N 5) TOGGLE the natural HOPO state, and that state depends
+    on note spacing — which reduction changes — so they are only ever passed
+    for the Expert tier they were computed against.
     """
     ticks = {t for t, _, _ in notes}
     lines = [(t, 0, f"  {t} = N {lane} {sus}") for t, lane, sus in notes]
     lines += [(t, 0, f"  {t} = N 6 0") for t in taps if t in ticks]
+    lines += [(t, 0, f"  {t} = N 5 0") for t in forced if t in ticks]
     lines += [
         (start, 1, f"  {start} = S 2 {length}")
         for start, length in star_power
@@ -61,6 +66,7 @@ def write_chart(
     lyrics: list[tuple[int, str]] = (),
     solos: list[tuple[int, int]] = (),
     taps: set[int] = frozenset(),
+    forced: set[int] = frozenset(),
 ) -> str:
     """Render a full .chart: real SyncTrack, sections, lyrics, every difficulty.
 
@@ -78,7 +84,8 @@ def write_chart(
         for tick, text, _ in sorted(merged, key=lambda e: (e[0], _event_rank(e[1]), e[2]))
     )
     blocks = "\n".join(
-        _tier_block(name, tiers[name], list(star_power), list(solos), set(taps))
+        _tier_block(name, tiers[name], list(star_power), list(solos), set(taps),
+                    set(forced) if name == "ExpertSingle" else frozenset())
         for name in TIERS if tiers.get(name)
     )
 

@@ -131,10 +131,28 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
         events = transcribe.transcribe(str(audio), progress)
         check()
         progress("[3/6] building Expert from transcription")
+        swing = set()
+        if getattr(opts, "swing", False):
+            # Opt-in: on real songs the detected beat grid's local phase
+            # error (±40ms) exceeds the 55ms separating the two grids, so
+            # per-onset classification misfires on straight songs (Faded
+            # measured 61 wrongly-swung beats). Until beat tracking is that
+            # precise, straight 16ths are the safe default.
+            swing = transcribe.swung_beats(events, tempo)
+            if swing:
+                progress(f"      swing: {len(swing)} beat(s) quantized to "
+                         f"the triplet grid")
         expert = transcribe.expert_from_notes(
             events, tempo, subdiv=opts.subdiv,
             min_sustain_beats=getattr(opts, 'min_sustain_beats', 0.5),
-            allow_opens=getattr(opts, "opens", True))
+            allow_opens=getattr(opts, "opens", True),
+            swing_beats=swing,
+            ornaments=not getattr(opts, "no_ornaments", False))
+        orn = sum(1 for t, _, _ in expert
+                  if t % (res // 8) == 0 and t % (res // 4) != 0)
+        if orn:
+            progress(f"      {orn} 32nd grace note(s) recovered from the "
+                     f"transcription")
         if getattr(opts, "density", "onset") == "onset":
             before = len({t for t, _, _ in expert})
             expert = density.gate_by_onsets(expert, y, sr, tempo)
@@ -289,11 +307,36 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         if dropped:
             progress(f"      rhythm: {dropped} one-off 16th fragment(s) "
                      f"consolidated to eighths")
+        # ponytail: a "chord-riff song" gate (keep strummed chords on
+        # punk/strum-rock, library median 49% chords vs EDM 7%) was shipped
+        # here and removed by audit: no chart-level signal separates the two.
+        # Raw chord share measured 33% on BOTH Mary Jane (strummy rock) and
+        # Faded (EDM), and same-shape-run share 79% vs 82% - full-mix
+        # transcription makes strummed guitar and pad stabs look identical.
+        # Needs the Demucs guitar stem (already computed later for solos)
+        # moved earlier; until then, unconditional demotion is the version
+        # that survived playtesting.
         expert = reduce.simplify_rapid_chords(expert, res)
         after = sum(1 for _, g in _group(expert).items() if len(g) > 1)
         if before > after:
             progress(f"      chords: {before} -> {after} positions "
                      f"(human charts use 5-13% on EDM)")
+
+    if not getattr(opts, "no_motifs", False):
+        from . import motifs
+
+        # settle_pushes MOVES notes without changing position counts, so a
+        # dropped-positions delta alone would hide it (the stairs no-op bug
+        # taught that every feature needs a visible count).
+        ticks_before = {t for t, _, _ in expert}
+        expert = motifs.settle_pushes(expert, res)
+        moved = len({t for t, _, _ in expert} - ticks_before)
+        n_before = len({t for t, _, _ in expert})
+        expert = motifs.break_machine_gun(expert, res)
+        thinned = n_before - len({t for t, _, _ in expert})
+        if moved or thinned:
+            progress(f"      flow: {moved} stray push(es) settled onto the "
+                     f"8th grid, {thinned} machine-gun note(s) thinned")
 
     # Nothing may be charted past the end of the audio: a note there is
     # simply unhittable. Cheap insurance against any tempo-map drift in an
@@ -322,6 +365,22 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         after = frets.step_share(expert, 3)
         if before > after:
             progress(f"      fret jumps >=3 lanes: {before:.0%} -> {after:.0%}")
+
+    if not getattr(opts, "no_motifs", False):
+        from . import motifs
+
+        # Lane-only reshapes, after jump smoothing so they see (and keep)
+        # playable hand travel: shapeless fast runs become 3-4 note wrap
+        # chunks, monotonic chord walks take the RBN rung ladder, and lone
+        # pickups into a chord take the chord's root.
+        lanes_before = {(t, l) for t, l, _ in expert}
+        expert = motifs.chunk_rolls(expert, res)
+        expert = motifs.shape_chord_walks(expert, res)
+        expert = motifs.pickup_roots(expert, res)
+        relaned = len({(t, l) for t, l, _ in expert} - lanes_before)
+        if relaned:
+            progress(f"      lanes: {relaned} note(s) reshaped into wrap "
+                     f"chunks, chord-ladder rungs, or pickup roots")
 
     target_diff = getattr(opts, "target_diff", None)
     if target_diff is not None:
@@ -359,6 +418,17 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             progress(f"      reused patterns across {len(repeats)} repeated "
                      f"section(s)")
 
+    if not getattr(opts, "no_riff_unify", False):
+        from . import structure
+
+        n_bars = max((t for t, _, _ in expert), default=0) // (4 * res) + 1
+        profiles = structure.bar_profiles(y, sr, tempo, n_bars)
+        expert, stamped = structure.unify_riff_bars(expert, profiles, res)
+        if stamped:
+            progress(f"      riffs: {stamped} bar(s) unified onto their "
+                     f"cluster's consensus pattern (human median: 48% of "
+                     f"bars repeat)")
+
     progress("[4/6] deriving Hard/Medium/Easy")
     check()
     if getattr(opts, "reducer", "chartgen") == "easygen":
@@ -385,6 +455,23 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             tiers, res, end_tick, min_gap_beats=opts.min_sustain_gap,
             bpm=tempo.bpm,
         )
+    if not opts.no_sustains and not getattr(opts, "no_motifs", False):
+        from . import motifs
+        from . import transcribe as transcribemod
+
+        # Sustain stairs: hold each note of a stepped phrase to just before
+        # its successor (78% of human charts, ~6 phrases per 100 bars; we had
+        # none). Before top-up, so the holds count toward the calibrated
+        # sustain share; re-propagated so lower tiers inherit the same holds.
+        stepped = motifs.legato_stairs(tiers["ExpertSingle"], res,
+                                       bpm=tempo.bpm)
+        if stepped != tiers["ExpertSingle"]:
+            grown = sum(1 for a, b in zip(sorted(tiers["ExpertSingle"]),
+                                          sorted(stepped)) if a[2] != b[2])
+            progress(f"      {grown} note(s) held as sustain stairs "
+                     f"(78% of human charts, ~6 phrases per 100 bars)")
+            tiers["ExpertSingle"] = stepped
+            tiers = transcribemod.propagate_sustains(tiers)
     if not opts.no_sustains:
         # Human charts sustain MORE as tiers get easier (8.7% of Expert notes
         # up to 15.3% on Easy); propagating Expert's lengths down left every
@@ -434,6 +521,17 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         solo_phrases = solomod.detect(expert, list(events), list(lyric_events),
                                       y, sr, tempo, progress,
                                       audio_path=str(audio))
+    forced_ticks: set[int] = set()
+    if opts.hopos and not getattr(opts, "no_motifs", False):
+        from . import motifs
+
+        # Forcing only means anything when natural HOPOs are on: with them
+        # off, song.ini's hopo_frequency=1 already makes every note a strum.
+        # Taps already never strum; a force flag on one is dead markup.
+        forced_ticks = motifs.legato_forcing(tiers["ExpertSingle"], res) - tap_ticks
+        if forced_ticks:
+            progress(f"      {len(forced_ticks)} note(s) forced to legato "
+                     f"HOPO (human median 3.9 per 100 notes)")
     progress(f"      {len(star_power)} star power phrase(s), {len(events)} section(s), "
              f"{len(solo_phrases)} solo(s), HOPOs {'on' if opts.hopos else 'off'}")
     check()
@@ -452,7 +550,7 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     chart_path.write_text(
         chartio.write_chart(tiers, tempo, meta, audio_filename, star_power, events,
                             lyrics=lyric_events, solos=solo_phrases,
-                            taps=tap_ticks),
+                            taps=tap_ticks, forced=forced_ticks),
         encoding="utf-8",
     )
     from . import rating

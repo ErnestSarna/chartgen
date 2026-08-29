@@ -66,6 +66,59 @@ def _fret_map(pitches: np.ndarray, n_frets: int = 5):
     return to_fret
 
 
+def swung_beats(events, tempo,
+                min_pitch: int = MIN_PITCH,
+                min_amplitude: float = MIN_AMPLITUDE) -> set[int]:
+    """Beat indices whose onsets sit on the triplet grid, not the 16th grid.
+
+    43% of the sub-16th content in the 800-chart library is 16th-triplets
+    (24ths) - shuffle and swing feel, not "faster notes" - and a swung song
+    hard-quantized to straight 16ths is charted wrong by the community's own
+    "chart the intent" rule. Per beat, onsets vote: a position near 1/6, 1/3,
+    2/3 or 5/6 of a beat fits only the triplet grid; near 1/4 or 3/4 fits
+    only the 16th grid (0 and 1/2 are shared and say nothing). A beat swings
+    when triplet-only onsets outnumber 16th-only ones there AND the song as
+    a whole shows a real triplet population - the song gate stops one noisy
+    beat from swinging an otherwise straight chart.
+
+    Per-beat (not per-onset) grid choice is what keeps the result playable:
+    two grids inside one beat can put notes 1/12 of a beat apart, which is
+    brokenNote territory; whole beats on either grid keep every gap >= 1/6.
+
+    OPT-IN (--swing), not a default. Measured on cached transcriptions of a
+    straight EDM song vs a shuffle rock song: the detected beat grid's local
+    phase error (librosa frame jitter plus interpolation, ~±40ms) exceeds
+    the 55ms that separates a 16th slot from a triplet slot, and Basic
+    Pitch's own onset timing smears the inter-onset histogram so badly that
+    the straight song produced MORE triplet-only votes than straight votes
+    (235 vs 133). No gate on top of votes that noisy can hold. ponytail:
+    revisit if beat tracking ever gets tick-accurate.
+    """
+    TOL = 0.045  # beats; ~30ms at 120 BPM, tighter than half a 24th
+    trip_votes: dict[int, int] = {}
+    straight_votes: dict[int, int] = {}
+    for start, _, pitch, amp in events:
+        if pitch < min_pitch or amp < min_amplitude:
+            continue
+        beat = tempo.time_to_beat(start)
+        b, frac = int(beat), beat % 1.0
+        trip = min(abs(frac - g) for g in (1/6, 1/3, 2/3, 5/6))
+        straight = min(abs(frac - g) for g in (0.25, 0.75))
+        if trip <= TOL < straight:
+            trip_votes[b] = trip_votes.get(b, 0) + 1
+        elif straight <= TOL < trip:
+            straight_votes[b] = straight_votes.get(b, 0) + 1
+    total_trip = sum(trip_votes.values())
+    # Song gate: a genuine shuffle produces dozens of triplet-only onsets
+    # spread across many beats; jitter produces a scatter of single votes.
+    if total_trip < 12 or len(trip_votes) < 8:
+        return set()
+    if total_trip < 0.5 * sum(straight_votes.values()):
+        return set()
+    return {b for b, v in trip_votes.items()
+            if v >= 2 and v > straight_votes.get(b, 0)}
+
+
 def expert_from_notes(
     events,
     tempo,
@@ -74,6 +127,8 @@ def expert_from_notes(
     min_amplitude: float = MIN_AMPLITUDE,
     min_sustain_beats: float = 0.5,
     allow_opens: bool = True,
+    swing_beats: set[int] = frozenset(),
+    ornaments: bool = True,
 ) -> list[tuple[int, int, int]]:
     """Chart-ready Expert notes [(tick, lane, sustain_ticks)].
 
@@ -100,7 +155,11 @@ def expert_from_notes(
 
     by_tick: dict[int, list[tuple[float, int, float]]] = {}
     for start, end, pitch, amp in kept:
-        tick = tempo.quantize(start, subdiv=subdiv)
+        # Swung beats quantize to the triplet grid (subdiv 6); everything
+        # else keeps the straight grid. Chosen per whole beat, so no two
+        # grids ever mix inside one (see swung_beats).
+        beat_subdiv = 6 if int(tempo.time_to_beat(start)) in swing_beats else subdiv
+        tick = tempo.quantize(start, subdiv=beat_subdiv)
         if tick < 0:
             continue
         by_tick.setdefault(tick, []).append((amp, pitch, end - start))
@@ -143,7 +202,88 @@ def expert_from_notes(
                 sustain = 0
         for lane in sorted(lanes):
             notes.append((tick, lane, max(0, sustain)))
+    if ornaments:
+        notes = _add_ornaments(notes, kept, tempo, fret_of, swing_beats,
+                               min_amplitude)
     return notes
+
+
+# 32nd ornaments are the riskiest motif in the study: a flam the audio does
+# not have feels broken instantly, so every gate here is deliberately tight.
+ORNAMENT_AMP_RATIO = 1.25     # louder than the ghost-note floor by a margin
+ORNAMENT_TOL_BEATS = 0.03     # ~20ms at 120 BPM; the onset must SIT there
+ORNAMENT_CAP_PER_SONG = 12
+ORNAMENT_REPEAT_BARS = 2      # the figure must recur nearby, like gallops
+
+
+def _add_ornaments(notes, kept, tempo, fret_of, swing_beats, min_amplitude):
+    """Recover a few 32nd grace notes the 16th grid swallowed.
+
+    37% of human sub-16th content is 32nds, and their shape is telling:
+    median burst run 3 notes - short ornamental flicks beside a main note,
+    not streams. Quantization currently merges such an onset into its
+    neighbour. One is re-emitted only when everything lines up: the onset
+    truly sits on an odd 32nd slot (tight tolerance), lands a 32nd from an
+    existing note with clear air on the other side, is louder than the
+    ghost floor by a margin, maps to a DIFFERENT lane (a same-lane 32nd
+    pair needs a 60ms double strum - and an invented contour is worse than
+    no ornament), and the same bar-position figure recurs within two bars.
+    At most one per bar and a dozen per song.
+    """
+    import bisect
+
+    res = tempo.resolution
+    step32 = res // 8
+    bar = res * 4
+    occupied = {t for t, _, _ in notes}
+    if not occupied:
+        return notes
+    ticks = sorted(occupied)
+
+    candidates = []
+    for start, _, pitch, amp in kept:
+        if amp < min_amplitude * ORNAMENT_AMP_RATIO:
+            continue
+        beat = tempo.time_to_beat(start)
+        if int(beat) in swing_beats:
+            continue  # triplet beats have their own grid
+        tick32 = int(round(beat * res / step32)) * step32
+        if tick32 <= 0 or tick32 % (res // 4) == 0 or tick32 in occupied:
+            continue  # not a true 32nd-only slot, or already a note
+        if abs(beat - tick32 / res) > ORNAMENT_TOL_BEATS:
+            continue
+        i = bisect.bisect_left(ticks, tick32)
+        before = tick32 - ticks[i - 1] if i > 0 else bar
+        after = ticks[i] - tick32 if i < len(ticks) else bar
+        # a flam: exactly one 32nd from a real note, air on the other side
+        if not ((before == step32 and after >= res // 4)
+                or (after == step32 and before >= res // 4)):
+            continue
+        parent = ticks[i - 1] if before == step32 else ticks[i]
+        parent_lanes = {l for t, l, _ in notes if t == parent}
+        lane = fret_of(pitch)
+        if lane in parent_lanes or OPEN in parent_lanes:
+            continue
+        candidates.append((tick32, lane))
+
+    if not candidates:
+        return notes
+    # Repeat gate: the same bar-offset must appear in another bar nearby.
+    by_offset: dict[int, list[int]] = {}
+    for t, _ in candidates:
+        by_offset.setdefault(t % bar, []).append(t // bar)
+    picked = []
+    used_bars = set()
+    for tick32, lane in sorted(candidates):
+        bars_here = by_offset[tick32 % bar]
+        if not any(0 < abs(b - tick32 // bar) <= ORNAMENT_REPEAT_BARS
+                   for b in bars_here):
+            continue
+        if tick32 // bar in used_bars or len(picked) >= ORNAMENT_CAP_PER_SONG:
+            continue
+        used_bars.add(tick32 // bar)
+        picked.append((tick32, lane, 0))
+    return sorted(notes + picked) if picked else notes
 
 
 def propagate_sustains(tiers: dict, expert_key: str = "ExpertSingle") -> dict:

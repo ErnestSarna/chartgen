@@ -133,6 +133,24 @@ def build_args(argv):
     ap.add_argument("--no-playability", action="store_true",
                     help="skip the human-hand simulation that simplifies or "
                          "drops passages nobody could physically play")
+    ap.add_argument("--no-riff-unify", action="store_true",
+                    help="skip stamping repeated-sounding bars with one "
+                         "consensus riff pattern (the median human chart "
+                         "repeats a bar 8x; ungated generation repeats none)")
+    ap.add_argument("--no-motifs", action="store_true",
+                    help="skip the flow-motif layer: sustain stairs, wrapped "
+                         "rolls, chord ladders, pickup roots, legato HOPO "
+                         "forcing, and machine-gun/stray-push consolidation")
+    ap.add_argument("--swing", action="store_true",
+                    help="quantize beats whose onsets fit the triplet grid to "
+                         "24ths (shuffle feel; Basic Pitch engine only). "
+                         "Off by default: measured on real songs, beat-grid "
+                         "phase error exceeds the 16th/triplet slot distance, "
+                         "so detection misfires on straight songs")
+    ap.add_argument("--no-ornaments", action="store_true",
+                    help="skip recovering 32nd grace notes the 16th grid "
+                         "swallowed (tightly gated: max one per bar, twelve "
+                         "per song; Basic Pitch engine only)")
     ap.add_argument("--no-star-power", action="store_true")
     ap.add_argument("--no-sections", action="store_true")
     ap.add_argument("--no-sustains", action="store_true")

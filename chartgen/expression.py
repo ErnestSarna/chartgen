@@ -5,10 +5,11 @@ set of lanes held at each frame (32 tokens); note duration and the is5/is6/isS
 flags are separate tuple fields that training discretization drops. So the model
 emits bare onsets, and everything expressive has to be derived here.
 
-Deliberately NOT generated (see README): tap notes and forced HOPO flags. Both
-are written as `N 6` / `N 5` lines, which the vendored difficulty reducer treats
-as ordinary notes — it would keep or drop them inconsistently per tier. Natural
-HOPOs need no markup at all; they are implicit in note spacing.
+Tap notes (chartgen.taps) and forced HOPO flags (chartgen.motifs) are computed
+elsewhere and applied at WRITE time, after reduction — the vendored difficulty
+reducer treats `N 6` / `N 5` lines as ordinary notes and would keep or drop
+them inconsistently per tier, so they never pass through it. Natural HOPOs
+need no markup at all; they are implicit in note spacing.
 """
 
 def hopo_threshold(resolution: int) -> int:

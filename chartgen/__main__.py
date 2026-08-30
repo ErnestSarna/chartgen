@@ -147,6 +147,11 @@ def build_args(argv):
                          "Off by default: measured on real songs, beat-grid "
                          "phase error exceeds the 16th/triplet slot distance, "
                          "so detection misfires on straight songs")
+    ap.add_argument("--no-brightness-lanes", action="store_true",
+                    help="never re-lane stuck stretches from the spectral "
+                         "contour; by default a long single-note run stuck "
+                         "on <=2 lanes whose audio shows a real filter sweep "
+                         "takes its lanes from brightness (growl wobbles)")
     ap.add_argument("--no-bass-fallback", action="store_true",
                     help="never chart the bassline; by default, stretches "
                          "where the melodic selection leaves <=1 note per bar "

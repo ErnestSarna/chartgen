@@ -623,6 +623,85 @@ def test_ladder_respects_budget_and_spacing():
     assert made == 3, made
 
 
+# ---------------------------------------------------------------- brightness
+
+from chartgen.frets import (  # noqa: E402
+    degenerate_stretches,
+    relane_by_brightness,
+)
+
+SR_TEST = 22050
+
+
+def _tone_track(t, note_ticks, freqs, dur=0.12):
+    """Synthetic melodic audio: a sine burst at each note's time."""
+    total = t.beat_to_time(note_ticks[-1] / RES) + 1.0
+    buf = np.zeros(int(total * SR_TEST), dtype=np.float32)
+    for tick, f in zip(note_ticks, freqs):
+        a = int(t.beat_to_time(tick / RES) * SR_TEST)
+        n = int(dur * SR_TEST)
+        x = np.arange(n)
+        buf[a:a + n] += 0.5 * np.sin(2 * np.pi * f * x / SR_TEST).astype(np.float32)
+    return buf
+
+
+def _stuck_notes(n=20, lane=0, gap=RES // 2, sus_at_idx=None):
+    return [(i * gap, lane, RES // 4 if i == sus_at_idx else 0) for i in range(n)]
+
+
+def test_brightness_relanes_a_swept_stuck_stretch():
+    t = steady()
+    notes = _stuck_notes()
+    ticks = [n[0] for n in notes]
+    freqs = [200 * (2 ** (i / 4)) for i in range(len(ticks))]  # rising sweep
+    audio = _tone_track(t, ticks, freqs)
+    out, changed = relane_by_brightness(notes, t, audio, SR_TEST)
+    assert changed == 1
+    lanes = [l for _, l, _ in out]
+    assert len(set(lanes)) >= 3, lanes
+    assert lanes[0] < lanes[-1], f"rising sweep must rise: {lanes}"
+    assert [n[0] for n in out] == ticks, "ticks never move"
+    # determinism
+    again, _ = relane_by_brightness(notes, t, audio, SR_TEST)
+    assert again == out
+
+
+def test_brightness_leaves_chugs_and_varied_lines():
+    t = steady()
+    notes = _stuck_notes()
+    ticks = [n[0] for n in notes]
+    drone = _tone_track(t, ticks, [400.0] * len(ticks))  # static: a chug
+    out, changed = relane_by_brightness(notes, t, drone, SR_TEST)
+    assert changed == 0 and out == sorted(notes)
+    varied = [(i * RES // 2, i % 4, 0) for i in range(12)]  # already moving
+    stretches, _ = degenerate_stretches(varied, RES)
+    assert stretches == []
+    silence = np.zeros(SR_TEST * 10, dtype=np.float32)
+    out, changed = relane_by_brightness(notes, t, silence, SR_TEST)
+    assert changed == 0, "silence has no contour to follow"
+    out, changed = relane_by_brightness(notes, t, None, SR_TEST)
+    assert changed == 0
+
+
+def test_brightness_respects_chords_sustains_and_opens():
+    t = steady()
+    # chords break stretches: two 5-note stuck halves around a chord
+    notes = _stuck_notes(5) + [(5 * RES // 2, 1, 0), (5 * RES // 2, 2, 0)]
+    notes += [((6 + i) * RES // 2, 0, 0) for i in range(5)]
+    stretches, _ = degenerate_stretches(sorted(notes), RES)
+    assert stretches == [], "5-note fragments are below the floor"
+    # sustains survive a relane; opens become fretted
+    notes = _stuck_notes(sus_at_idx=3)
+    notes[5] = (notes[5][0], 7, 0)  # an open inside the stretch
+    ticks = [n[0] for n in notes]
+    freqs = [200 * (2 ** (i / 4)) for i in range(len(ticks))]
+    out, changed = relane_by_brightness(notes, t, _tone_track(t, ticks, freqs),
+                                        SR_TEST)
+    assert changed == 1
+    assert sus_at(out, notes[3][0]) == RES // 4, "sustain length preserved"
+    assert lanes_at(out, notes[5][0])[0] != 7, "open inside sweep gets a fret"
+
+
 # ---------------------------------------------------------------- writing
 
 def test_forced_flags_written_expert_only():

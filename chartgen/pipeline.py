@@ -383,6 +383,25 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             progress(f"      playability: {before:.1%} -> {after:.1%} of "
                      f"transitions too fast to play (human median 1.3%)")
 
+    if not getattr(opts, "no_brightness_lanes", False):
+        stretches, _ = frets.degenerate_stretches(expert, res)
+        if stretches:
+            from . import stems as stemsmod
+
+            st = stemsmod.separate(str(audio), progress)
+            if st is not None:
+                import numpy as np
+
+                melodic = (st.get("bass", 0) + st.get("other", 0))
+                if isinstance(melodic, np.ndarray):
+                    expert, relaned = frets.relane_by_brightness(
+                        expert, tempo, melodic, stemsmod.SR)
+                    if relaned:
+                        progress(f"      brightness lanes: {relaned} stuck "
+                                 f"stretch(es) re-laned from the filter/"
+                                 f"timbre contour (humans chart 4 lanes "
+                                 f"even in bass-led sections)")
+
     max_jump = int(getattr(opts, "max_fret_jump", 2))
     if max_jump < 4:
         before = frets.step_share(expert, 3)

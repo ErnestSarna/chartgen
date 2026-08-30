@@ -108,6 +108,127 @@ def reassign_frets(
     return sorted(out)
 
 
+# Brightness lanes: a stretch this long stuck on this few lanes is the
+# degenerate case; the centroid span gate is what protects deliberate
+# monotony (palm-muted chugs barely move spectrally; a filter sweep moves
+# a lot). Ratios are on raw Hz centroids, p90/p10 within the stretch.
+DEGENERATE_MIN_BEATS = 8
+DEGENERATE_MIN_NOTES = 6
+DEGENERATE_MAX_LANES = 2
+BRIGHTNESS_MIN_SPAN = 1.6
+BRIGHTNESS_NOTE_WINDOW_S = 0.12
+
+
+def degenerate_stretches(notes, resolution: int):
+    """[(index_lo, index_hi)] over positions: long single-note runs stuck
+    on <=2 distinct lanes (opens count as a lane). Chords end a run - a
+    chord section has its own texture and is never 'stuck'."""
+    by_tick: dict[int, list[int]] = {}
+    for t, lane, _ in notes:
+        by_tick.setdefault(t, []).append(lane)
+    ticks = sorted(by_tick)
+    out = []
+    i = 0
+    while i < len(ticks):
+        if len(by_tick[ticks[i]]) != 1:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(ticks) and len(by_tick[ticks[j + 1]]) == 1:
+            j += 1
+        # maximal single-note run [i, j]; find stuck sub-stretches
+        k = i
+        while k <= j:
+            m = k
+            seen = set()
+            while m <= j:
+                seen_next = seen | {by_tick[ticks[m]][0]}
+                if len(seen_next) > DEGENERATE_MAX_LANES:
+                    break
+                seen = seen_next
+                m += 1
+            length = m - k
+            beats = (ticks[m - 1] - ticks[k]) / resolution if length > 1 else 0
+            if length >= DEGENERATE_MIN_NOTES and beats >= DEGENERATE_MIN_BEATS:
+                out.append((k, m - 1))
+                k = m
+            else:
+                k += 1  # a stuck stretch may begin inside the failed span
+        i = j + 1
+    return out, ticks
+
+
+def relane_by_brightness(notes, tempo, melodic, sr):
+    """Re-lane stuck stretches from the spectral-centroid contour.
+
+    Validated need (95-song ownership study): in bass-dominated windows
+    human charts still use a median of FOUR distinct lanes - charters
+    chart the filter sweep as lane movement when pitch has nothing to
+    say (a growl's wub rising and falling reads as notes climbing and
+    falling; that is what the ear tracks at constant f0). Our mapping is
+    strictly pitch-driven, so a monotone growl riff charted one lane -
+    the exact "one note repeated or opens" playtest complaint.
+
+    Only stretches that are BOTH stuck (<=2 lanes across 8+ beats of
+    single notes) AND spectrally moving (centroid p90/p10 >= 1.6 on the
+    melodic stems) are touched: a palm-muted chug is stuck but static,
+    and stays; a varied line is never stuck. Lanes come from quantile-
+    mapped log-centroids, median-filtered so frame jitter cannot zigzag,
+    and the result must actually gain variety (>=3 lanes) or the stretch
+    is left alone. Ticks, sustains and counts never change; opens inside
+    a re-laned stretch become fretted (they were register artifacts of
+    the octave-lift, not punctuation).
+    """
+    import numpy as np
+
+    if not notes or melodic is None or not len(melodic):
+        return notes, 0
+    stretches, ticks = degenerate_stretches(notes, tempo.resolution)
+    if not stretches:
+        return notes, 0
+    res = tempo.resolution
+    relane: dict[int, int] = {}
+    changed = 0
+    for lo, hi in stretches:
+        cents = []
+        for k in range(lo, hi + 1):
+            t0 = tempo.beat_to_time(ticks[k] / res)
+            a = int(t0 * sr)
+            b = min(len(melodic), a + int(BRIGHTNESS_NOTE_WINDOW_S * sr))
+            seg = melodic[a:b]
+            if len(seg) < 256:
+                cents.append(cents[-1] if cents else 0.0)
+                continue
+            spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+            freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
+            power = spec.sum()
+            cents.append(float((spec * freqs).sum() / power) if power > 0 else 0.0)
+        cents = np.asarray(cents)
+        voiced = cents[cents > 0]
+        if len(voiced) < DEGENERATE_MIN_NOTES:
+            continue
+        p10, p90 = np.percentile(voiced, 10), np.percentile(voiced, 90)
+        if p10 <= 0 or p90 / p10 < BRIGHTNESS_MIN_SPAN:
+            continue  # spectrally static: a chug, not a sweep
+        logc = np.log(np.maximum(cents, p10 * 0.5))
+        lanes = np.clip(((logc - np.log(p10)) / (np.log(p90) - np.log(p10))
+                         * 5).astype(int), 0, 4)
+        # median filter width 3: frame jitter must not zigzag the hand
+        smooth = lanes.copy()
+        for k in range(1, len(lanes) - 1):
+            smooth[k] = sorted(lanes[k - 1:k + 2])[1]
+        if len(set(int(x) for x in smooth)) < 3:
+            continue  # no variety gained: leave the honest monotone
+        for k, lane in zip(range(lo, hi + 1), smooth):
+            relane[ticks[k]] = int(lane)
+        changed += 1
+    if not relane:
+        return notes, 0
+    out = [(t, relane.get(t, lane), sus) if t in relane else (t, lane, sus)
+           for t, lane, sus in notes]
+    return sorted(out), changed
+
+
 def smooth_fret_jumps(notes, tempo, max_step: int = 2,
                       free_gap_beats: float = 2.0):
     """Cap how far the hand travels between consecutive positions.

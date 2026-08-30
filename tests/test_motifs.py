@@ -24,6 +24,7 @@ from chartgen.motifs import (  # noqa: E402
 from chartgen.structure import unify_riff_bars  # noqa: E402
 from chartgen.tempo import RESOLUTION, TempoMap  # noqa: E402
 from chartgen.transcribe import (  # noqa: E402
+    bass_fallback_events,
     expert_from_notes,
     extend_ladders,
     swung_beats,
@@ -446,6 +447,60 @@ def test_ornament_quiet_onsets_ignored():
     orn = [tick for tick, _, _ in notes if tick % (RES // 8) == 0
            and tick % (RES // 4) != 0]
     assert not orn, "a quiet 32nd is a ghost, not evidence"
+
+
+# ---------------------------------------------------------------- fallback
+
+def _song(t, melody_bars, bass_bars):
+    """Synthetic events: 4 melody notes/bar in melody_bars, 4 bass
+    notes/bar (pitch 30) in bass_bars."""
+    ev = []
+    for b in melody_bars:
+        for k in range(4):
+            s = t.beat_to_time(b * 4 + k)
+            ev.append((s, s + 0.2, 60 + k, 0.6))
+    for b in bass_bars:
+        for k in range(4):
+            s = t.beat_to_time(b * 4 + k)
+            ev.append((s, s + 0.2, 30, 0.6))
+    return ev
+
+
+def test_fallback_admits_bass_only_in_starved_runs():
+    t = steady()
+    # melody plays bars 0-3, vanishes bars 4-7 while the bass keeps going
+    ev = _song(t, melody_bars=range(0, 4), bass_bars=range(0, 8))
+    extra = bass_fallback_events(ev, t)
+    assert len(extra) == 16, len(extra)  # bars 4-7 only, 4 notes each
+    bars = {int(t.time_to_beat(s) / 4) for s, _, _, _ in extra}
+    assert bars == {4, 5, 6, 7}, bars
+    assert all(p >= 40 for _, _, p, _ in extra), "must be octave-lifted"
+    assert all((p - 30) % 12 == 0 for _, _, p, _ in extra), \
+        "lift preserves pitch class"
+
+
+def test_fallback_never_fires_on_short_gaps_or_beside_a_lead():
+    t = steady()
+    # a single starved bar (a breath) does not flip the chart to the bass
+    ev = _song(t, melody_bars=[0, 1, 2, 4, 5], bass_bars=range(0, 6))
+    assert bass_fallback_events(ev, t) == []
+    # bass under a playing lead never gets admitted
+    ev = _song(t, melody_bars=range(0, 8), bass_bars=range(0, 8))
+    assert bass_fallback_events(ev, t) == []
+    # starved bars with no bass either: nothing to admit
+    ev = _song(t, melody_bars=range(0, 4), bass_bars=range(0, 4))
+    assert bass_fallback_events(ev, t) == []
+
+
+def test_fallback_ignores_rumble_and_ghosts():
+    t = steady()
+    ev = _song(t, melody_bars=range(0, 2), bass_bars=[])
+    for b in (2, 3, 4):
+        for k in range(4):
+            s = t.beat_to_time(b * 4 + k)
+            ev.append((s, s + 0.2, 20, 0.6))   # sub-bass rumble: too low
+            ev.append((s, s + 0.2, 30, 0.10))  # ghost: too quiet
+    assert bass_fallback_events(ev, t) == []
 
 
 # ---------------------------------------------------------------- ladders

@@ -147,6 +147,11 @@ def build_args(argv):
                          "Off by default: measured on real songs, beat-grid "
                          "phase error exceeds the 16th/triplet slot distance, "
                          "so detection misfires on straight songs")
+    ap.add_argument("--no-bass-fallback", action="store_true",
+                    help="never chart the bassline; by default, stretches "
+                         "where the melodic selection leaves <=1 note per bar "
+                         "for 2+ bars admit the bass register octave-lifted "
+                         "(EDM breakdowns where the growl IS the foreground)")
     ap.add_argument("--no-ornaments", action="store_true",
                     help="skip recovering 32nd grace notes the 16th grid "
                          "swallowed (tightly gated: max one per bar, twelve "

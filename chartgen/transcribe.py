@@ -286,6 +286,82 @@ def _add_ornaments(notes, kept, tempo, fret_of, swing_beats, min_amplitude):
     return sorted(notes + picked) if picked else notes
 
 
+# Register fallback: below this is kick fundamentals and rumble, never a
+# melodic bassline worth charting.
+BASS_MIN_PITCH = 24
+# A bar is starved when the normal selection leaves at most this many
+# positions in it; only runs of starved bars trigger the fallback, so a
+# one-bar breath between phrases never flips the chart to the bass.
+FALLBACK_MAX_KEPT_PER_BAR = 1
+FALLBACK_MIN_RUN_BARS = 2
+FALLBACK_MIN_LOW_PER_BAR = 2
+
+
+def bass_fallback_events(events, tempo,
+                         min_pitch: int = MIN_PITCH,
+                         min_amplitude: float = MIN_AMPLITUDE):
+    """Low-register events to admit where the melodic selection starves.
+
+    The MIN_PITCH floor exists because a guitar chart following the bass
+    feels wrong WHEN A LEAD IS PLAYING. In an EDM breakdown the growl
+    bassline IS the foreground - measured on SIKS' Toccata, 40s stretches
+    kept 4-5 notes per 10s while dropping 13-14 bass events as
+    "too low-pitched", charting near-silence through the loudest part of
+    the song. Human charters follow the most interesting voice; when the
+    only voice is the bass, so should we.
+
+    This is the lowest-risk slice of the parked section-committed
+    instrument plan: it only acts where there is essentially nothing to
+    override (kept positions collapse for >=2 consecutive bars while low
+    events keep playing), so the failure mode of overriding a present
+    lead cannot occur by construction. Admitted notes are octave-lifted
+    into the guitar register so the pitch->fret map places the bassline's
+    CONTOUR at the bottom of the neck - and a lone lifted low note can
+    still become an open note downstream, which is exactly the human use
+    of opens (bass drops, chugs, pedal tones).
+    """
+    res = tempo.resolution
+    bar_beats = 4.0
+
+    def bar_of(t):
+        return int(tempo.time_to_beat(t) / bar_beats)
+
+    kept_positions: dict[int, set] = {}
+    low_by_bar: dict[int, list] = {}
+    for start, end, pitch, amp in events:
+        if amp < min_amplitude:
+            continue
+        b = bar_of(start)
+        if pitch >= min_pitch:
+            kept_positions.setdefault(b, set()).add(
+                tempo.quantize(start, subdiv=4))
+        elif pitch >= BASS_MIN_PITCH:
+            low_by_bar.setdefault(b, []).append((start, end, pitch, amp))
+
+    if not low_by_bar:
+        return []
+    last_bar = max(max(kept_positions, default=0), max(low_by_bar))
+    starved = [b for b in range(last_bar + 1)
+               if len(kept_positions.get(b, ())) <= FALLBACK_MAX_KEPT_PER_BAR
+               and len(low_by_bar.get(b, ())) >= FALLBACK_MIN_LOW_PER_BAR]
+
+    admitted = []
+    run: list[int] = []
+    for b in starved + [None]:
+        if run and (b is None or b != run[-1] + 1):
+            if len(run) >= FALLBACK_MIN_RUN_BARS:
+                for rb in run:
+                    for start, end, pitch, amp in low_by_bar.get(rb, ()):
+                        lifted = pitch
+                        while lifted < min_pitch:
+                            lifted += 12
+                        admitted.append((start, end, lifted, amp))
+            run = []
+        if b is not None:
+            run.append(b)
+    return admitted
+
+
 # Extended-sustain ladders: a held note keeps RINGING while higher lanes
 # join on top (G held, R joins, Y stacks - the community's "building
 # towards" idiom, the one sanctioned route to big chords). Library: 39% of

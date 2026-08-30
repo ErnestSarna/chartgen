@@ -131,6 +131,12 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
         events = transcribe.transcribe(str(audio), progress)
         check()
         progress("[3/6] building Expert from transcription")
+        if not getattr(opts, "no_bass_fallback", False):
+            extra = transcribe.bass_fallback_events(events, tempo)
+            if extra:
+                progress(f"      register fallback: {len(extra)} bass note(s) "
+                         f"admitted where the melodic selection starves")
+                events = events + extra
         swing = set()
         if getattr(opts, "swing", False):
             # Opt-in: on real songs the detected beat grid's local phase

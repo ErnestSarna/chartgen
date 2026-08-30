@@ -341,7 +341,7 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         # Needs the Demucs guitar stem (already computed later for solos)
         # moved earlier; until then, unconditional demotion is the version
         # that survived playtesting.
-        expert = reduce.simplify_rapid_chords(expert, res)
+        expert = reduce.simplify_rapid_chords(expert, res, tempo=tempo)
         after = sum(1 for _, g in _group(expert).items() if len(g) > 1)
         if before > after:
             progress(f"      chords: {before} -> {after} positions "

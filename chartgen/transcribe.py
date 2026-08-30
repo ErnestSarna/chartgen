@@ -18,9 +18,14 @@ import numpy as np
 MIN_PITCH = 40
 # Basic Pitch amplitudes run 0-1; quiet events are usually harmonic ghosts.
 MIN_AMPLITUDE = 0.20
-# Two, not three. Playtest: three EDM charts were unplayable inside 30
-# seconds, and the human charts of the same songs use 0-10% three-note
-# chords against our 6-17%.
+# Two, not three - re-verified 2026-08-30 after the playability fix made a
+# relaxation experiment worth running. Raising to 3 flooded charts far past
+# the human bands (a punk chart hit 11.8% three-note positions vs its human
+# chart's 0%; EDM chord share 18%->29% with 39 rapid shape changes),
+# because a third comparable-amplitude pitch also mints NEW two-note chords
+# whenever two of the three map to distinct frets. The cap is doing real
+# stylistic work the playability simulator cannot (reachable != charted by
+# humans). Three-note shapes stay on the curated climax-chord route.
 MAX_CHORD = 2
 # A chord is several strings struck TOGETHER, so its notes have comparable
 # energy. A lead note over a quiet pad is a single note with accompaniment —

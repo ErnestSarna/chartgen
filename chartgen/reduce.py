@@ -345,7 +345,7 @@ def derive_lower_tiers_vendored(expert_chart_text: str) -> dict[str, list[Note]]
 
 
 def simplify_rapid_chords(notes: list[Note], resolution: int,
-                          max_chord: int = 2) -> list[Note]:
+                          max_chord: int = 3, tempo=None) -> list[Note]:
     """Demote chords that arrive too fast to re-shape the hand for.
 
     Playtest: three charts were unplayable inside 30 seconds — "combos very
@@ -354,12 +354,36 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
     had 192 chord-to-chord shape changes inside an eighth note where the human
     chart had none.
 
-    A chord is one hand shape. Changing shape is fine with a beat to do it in;
-    doing it every sixteenth is not, however correct the transcription was.
-    So a chord following a DIFFERENT chord too closely collapses to its root,
-    which keeps the rhythm and the melody line while dropping the contortion.
+    Two eras of this rule. The original (tempo=None, kept as the fallback)
+    was a blunt clamp: any chord within a half-beat of a DIFFERENT chord, or
+    off the eighth grid, collapsed to its root — installed when the
+    playability simulator could not be trusted to catch the contortions
+    itself (the finger-lift bug meant it flagged legitimate stabs and missed
+    nothing either way). With tempo, the rule defers to the FIXED simulator:
+    a chord is demoted only when forming it from the previous position
+    genuinely costs more time than the chart provides. Off-grid push chords
+    that the hand can reach (Mary Jane's chorus lives on them) survive;
+    every real contortion still dies, just surgically.
     """
+    from . import playability
+
     groups = _by_tick(notes)
+    # Off-grid chords: the old blanket demotion of every chord off the 8th
+    # grid turned out to be the main EDM chord suppressor (removing it took
+    # a test chart from 18% to 29% chords against a 5-13% human band) - it
+    # enforces the real "chords are accents on beats and 8ths" norm. But it
+    # also killed deliberate push chords (Mary Jane's chorus anticipates the
+    # beat bar after bar). Same doctrine as motifs.settle_pushes: recurrence
+    # is the evidence of intent. An off-grid chord whose bar-offset recurs
+    # in a neighbouring bar is a push and lives; a one-off pad hit demotes.
+    bar = 4 * resolution
+    off_grid_chords = {t for t, g in groups.items()
+                       if sum(1 for n in g if n[1] != OPEN) > 1
+                       and t % (resolution // 2) != 0}
+    push_ok = {t for t in off_grid_chords
+               if any((t + d * bar) in off_grid_chords
+                      and (t + d * bar) % bar == t % bar
+                      for d in (-2, -1, 1, 2))}
     out: list[Note] = []
     prev_tick, prev_shape = None, None
     for tick in sorted(groups):
@@ -369,17 +393,27 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
         kept = fretted[:max_chord] if fretted else group[:max_chord]
         shape = tuple(n[1] for n in kept)
 
-        rapid_change = (prev_shape is not None and len(prev_shape) > 1
-                        and shape != prev_shape
-                        and tick - prev_tick < resolution // 2)
-        # A chord is an accent. Human charts place them on beats and eighths;
-        # a chord landing on a sixteenth subdivision mid-run is the thing that
-        # made these charts unplayable, since the hand has to re-shape between
-        # sixteenths. Off-grid chords collapse to their root note.
-        off_grid = tick % (resolution // 2) != 0
-        if len(shape) > 1 and (rapid_change or off_grid):
-            kept = kept[:1]           # keep the root; the melody survives
-            shape = tuple(n[1] for n in kept)
+        if len(shape) > 1 and prev_shape is not None:
+            # Style rule in BOTH eras: a different chord shape within a
+            # half-beat of the last one. Humans strum same-shape runs
+            # (59.7% of adjacent chord pairs) and avoid rapid re-shapes;
+            # relaxing this to pure pairwise reachability flooded an EDM
+            # test chart with 42 fast shape changes the simulator approved
+            # individually - each reachable, the stream exhausting (the
+            # cost model has no fatigue).
+            rapid_change = (len(prev_shape) > 1 and shape != prev_shape
+                            and tick - prev_tick < resolution // 2)
+            if tempo is not None:
+                available = (tempo.beat_to_time(tick / resolution)
+                             - tempo.beat_to_time(prev_tick / resolution))
+                stray = tick in off_grid_chords and tick not in push_ok
+                too_fast = rapid_change or stray or playability.cost(
+                    set(prev_shape), set(shape), is_hopo=False) > available
+            else:
+                too_fast = rapid_change or tick % (resolution // 2) != 0
+            if too_fast:
+                kept = kept[:1]       # keep the root; the melody survives
+                shape = tuple(n[1] for n in kept)
 
         out.extend(kept)
         out.extend(opens[:1] if not kept else [])

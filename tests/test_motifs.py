@@ -518,15 +518,20 @@ def test_admit_stem_events_gates():
         (inside + 2.0, inside + 2.1, 45, 0.05), # ghost: no
         (inside + 3.0, inside + 3.1, 20, 0.5),  # rumble: no
     ]
-    out = admit_stem_events(stem_ev, runs, kept_times=[])
+    out = admit_stem_events(stem_ev, runs, [], t)
     assert len(out) == 2, out
     assert {p for _, _, p, _ in out} == {45, 42}, out
-    # duplicate of an already-kept mix note is not a rescue
-    out = admit_stem_events(stem_ev, runs, kept_times=[inside + 0.02])
-    assert all(abs(s - inside) > 0.05 for s, _, _, _ in out), out
-    # two stems cannot double-admit the same moment
-    twice = [(inside, inside + 0.3, 45, 0.5), (inside + 0.01, inside + 0.2, 50, 0.5)]
-    out = admit_stem_events(twice, runs, kept_times=[])
+    # a stem event whose 16th TICK the mix already charted is a twin, not a
+    # rescue - even ~90ms away (the fake-chord bug: time-based dedupe let it
+    # through and it quantized onto the same tick)
+    kept = [(inside + 0.09, inside + 0.3, 60, 0.5)]
+    out = admit_stem_events(stem_ev, runs, kept, t)
+    assert all(t.quantize(s, subdiv=4) != t.quantize(inside + 0.09, subdiv=4)
+               for s, _, _, _ in out), out
+    # two stems cannot double-admit the same tick
+    twice = [(inside, inside + 0.3, 45, 0.5),
+             (inside + 0.01, inside + 0.2, 50, 0.5)]
+    out = admit_stem_events(twice, runs, [], t)
     assert len(out) == 1, out
 
 

@@ -329,35 +329,41 @@ def starved_runs(events, tempo,
     return out
 
 
-def admit_stem_events(stem_events, runs_sec, kept_times,
+def admit_stem_events(stem_events, runs_sec, kept_events, tempo,
                       min_pitch: int = MIN_PITCH,
-                      min_amplitude: float = MIN_AMPLITUDE,
-                      dedupe_s: float = 0.060):
+                      min_amplitude: float = MIN_AMPLITUDE):
     """Filter stem-transcribed events down to what starved stretches may add.
 
     Only events inside a starved run survive; ghosts and sub-bass rumble are
-    dropped by the same floors as the mix path; anything within dedupe_s of a
-    note the mix transcription already kept is a duplicate, not a rescue; and
-    sub-guitar pitches octave-lift exactly like the register fallback.
-    """
-    import bisect
+    dropped by the same floors as the mix path; sub-guitar pitches
+    octave-lift exactly like the register fallback.
 
-    kept_sorted = sorted(kept_times)
+    Dedupe is at the QUANTIZED-TICK level, learned the hard way: a 60ms
+    time-proximity dedupe let stem events 70-110ms from a kept mix note
+    through, and at 129 BPM those quantize onto the SAME 16th tick - the
+    same musical note heard twice became a fake two-note chord. The rescued
+    sections filled with accidental chords, playability flagged 28.7% of
+    transitions impossible, and enforcement collapsed everything back to
+    roots: we manufactured intensity and then correctly deleted it. A
+    rescued note may only land on an EMPTY tick - filling holes is the
+    rescue's entire purpose.
+    """
+    taken = {tempo.quantize(s, subdiv=4) for s, _, p, a in kept_events
+             if p >= min_pitch and a >= min_amplitude}
     out = []
     for start, end, pitch, amp in stem_events:
         if amp < min_amplitude or pitch < BASS_MIN_PITCH:
             continue
         if not any(t0 <= start < t1 for t0, t1 in runs_sec):
             continue
-        i = bisect.bisect_left(kept_sorted, start)
-        near = [kept_sorted[j] for j in (i - 1, i) if 0 <= j < len(kept_sorted)]
-        if any(abs(start - k) < dedupe_s for k in near):
-            continue
+        tick = tempo.quantize(start, subdiv=4)
+        if tick in taken:
+            continue  # the moment is already charted; a twin is not a rescue
         lifted = pitch
         while lifted < min_pitch:
             lifted += 12
         out.append((start, end, lifted, amp))
-        bisect.insort(kept_sorted, start)  # stems must not duplicate each other
+        taken.add(tick)  # stems must not duplicate each other either
     return out
 
 
@@ -389,8 +395,7 @@ def stem_rescue_events(events, tempo, stems: dict, progress=lambda m: None,
 
     from . import stems as stemsmod
 
-    kept_times = [s for s, _, p, a in events
-                  if p >= min_pitch and a >= min_amplitude]
+    known = list(events)
     admitted = []
     for name in ("other", "bass"):
         wav = stems.get(name)
@@ -411,10 +416,10 @@ def stem_rescue_events(events, tempo, stems: dict, progress=lambda m: None,
                 pass
         stem_events = [(float(s), float(e), int(p), float(a))
                        for s, e, p, a, *_ in note_events]
-        new = admit_stem_events(stem_events, runs, kept_times,
+        new = admit_stem_events(stem_events, runs, known, tempo,
                                 min_pitch, min_amplitude)
         admitted.extend(new)
-        kept_times.extend(s for s, _, _, _ in new)
+        known.extend(new)
     return admitted
 
 

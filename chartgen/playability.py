@@ -31,6 +31,20 @@ def _anchor(lanes):
 def cost(prev_lanes, lanes, is_hopo: bool) -> float:
     """Seconds a player needs to get from one position to the next."""
     needed = 0.0 if is_hopo else STRUM
+    prev_fret = {l for l in prev_lanes if l != OPEN}
+    cur_fret = {l for l in lanes if l != OPEN}
+    if prev_fret and cur_fret and (cur_fret <= prev_fret
+                                   or prev_fret <= cur_fret):
+        # One position is a subset of the other: fingers stay planted and
+        # one lifts or lands - not a re-shape, and the hand does not move
+        # even though min() says the "anchor" changed. Charging the full
+        # shape cost here flagged 29% of an EDM chart's transitions
+        # impossible (chord-stab riffs alternate G+R and single at 16ths,
+        # which humans play by releasing a finger) and enforcement then
+        # demoted the stabs to roots - gutting exactly the intense
+        # sections. Chord-stab mixes are a documented human staple (5 per
+        # 100 bars median, 27 on punk).
+        return needed + PER_LANE * len(cur_fret ^ prev_fret)
     needed += abs(_anchor(lanes) - _anchor(prev_lanes)) * PER_LANE
     prev_shape = tuple(sorted(l - _anchor(prev_lanes) for l in prev_lanes))
     shape = tuple(sorted(l - _anchor(lanes) for l in lanes))

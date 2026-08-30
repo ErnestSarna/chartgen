@@ -24,9 +24,11 @@ from chartgen.motifs import (  # noqa: E402
 from chartgen.structure import unify_riff_bars  # noqa: E402
 from chartgen.tempo import RESOLUTION, TempoMap  # noqa: E402
 from chartgen.transcribe import (  # noqa: E402
+    admit_stem_events,
     bass_fallback_events,
     expert_from_notes,
     extend_ladders,
+    starved_runs,
     swung_beats,
 )
 
@@ -490,6 +492,42 @@ def test_fallback_never_fires_on_short_gaps_or_beside_a_lead():
     # starved bars with no bass either: nothing to admit
     ev = _song(t, melody_bars=range(0, 4), bass_bars=range(0, 4))
     assert bass_fallback_events(ev, t) == []
+
+
+def test_starved_runs_found_and_bounded():
+    t = steady()
+    ev = _song(t, melody_bars=[0, 1, 2, 3, 8, 9], bass_bars=[])
+    runs = starved_runs(ev, t)
+    assert len(runs) == 1, runs
+    t0, t1 = runs[0]
+    assert abs(t0 - t.beat_to_time(16)) < 0.05, runs  # bars 4-7
+    assert abs(t1 - t.beat_to_time(32)) < 0.05, runs
+    # continuous melody: no starvation
+    assert starved_runs(_song(t, melody_bars=range(8), bass_bars=[]), t) == []
+
+
+def test_admit_stem_events_gates():
+    t = steady()
+    runs = [(t.beat_to_time(16), t.beat_to_time(32))]
+    inside = t.beat_to_time(20)
+    outside = t.beat_to_time(4)
+    stem_ev = [
+        (inside, inside + 0.3, 45, 0.5),        # good: admitted as-is
+        (inside + 1.0, inside + 1.2, 30, 0.5),  # low: admitted octave-lifted
+        (outside, outside + 0.3, 45, 0.5),      # outside starved run: no
+        (inside + 2.0, inside + 2.1, 45, 0.05), # ghost: no
+        (inside + 3.0, inside + 3.1, 20, 0.5),  # rumble: no
+    ]
+    out = admit_stem_events(stem_ev, runs, kept_times=[])
+    assert len(out) == 2, out
+    assert {p for _, _, p, _ in out} == {45, 42}, out
+    # duplicate of an already-kept mix note is not a rescue
+    out = admit_stem_events(stem_ev, runs, kept_times=[inside + 0.02])
+    assert all(abs(s - inside) > 0.05 for s, _, _, _ in out), out
+    # two stems cannot double-admit the same moment
+    twice = [(inside, inside + 0.3, 45, 0.5), (inside + 0.01, inside + 0.2, 50, 0.5)]
+    out = admit_stem_events(twice, runs, kept_times=[])
+    assert len(out) == 1, out
 
 
 def test_fallback_ignores_rumble_and_ghosts():

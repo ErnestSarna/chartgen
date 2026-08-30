@@ -297,6 +297,127 @@ FALLBACK_MIN_RUN_BARS = 2
 FALLBACK_MIN_LOW_PER_BAR = 2
 
 
+def starved_runs(events, tempo,
+                 min_pitch: int = MIN_PITCH,
+                 min_amplitude: float = MIN_AMPLITUDE):
+    """[(start_s, end_s)] stretches where the melodic selection starves.
+
+    Runs of >=FALLBACK_MIN_RUN_BARS bars keeping <=FALLBACK_MAX_KEPT_PER_BAR
+    positions - the trigger validated by the register-fallback sweep (49
+    songs: 97% of triggered bars carry >=2 notes in the human chart).
+    """
+    bar_beats = 4.0
+    kept: dict[int, set] = {}
+    last_bar = 0
+    for start, _, pitch, amp in events:
+        b = int(tempo.time_to_beat(start) / bar_beats)
+        last_bar = max(last_bar, b)
+        if pitch >= min_pitch and amp >= min_amplitude:
+            kept.setdefault(b, set()).add(tempo.quantize(start, subdiv=4))
+    starved = [b for b in range(last_bar + 1)
+               if len(kept.get(b, ())) <= FALLBACK_MAX_KEPT_PER_BAR]
+    out = []
+    run: list[int] = []
+    for b in starved + [None]:
+        if run and (b is None or b != run[-1] + 1):
+            if len(run) >= FALLBACK_MIN_RUN_BARS:
+                out.append((tempo.beat_to_time(run[0] * bar_beats),
+                            tempo.beat_to_time((run[-1] + 1) * bar_beats)))
+            run = []
+        if b is not None:
+            run.append(b)
+    return out
+
+
+def admit_stem_events(stem_events, runs_sec, kept_times,
+                      min_pitch: int = MIN_PITCH,
+                      min_amplitude: float = MIN_AMPLITUDE,
+                      dedupe_s: float = 0.060):
+    """Filter stem-transcribed events down to what starved stretches may add.
+
+    Only events inside a starved run survive; ghosts and sub-bass rumble are
+    dropped by the same floors as the mix path; anything within dedupe_s of a
+    note the mix transcription already kept is a duplicate, not a rescue; and
+    sub-guitar pitches octave-lift exactly like the register fallback.
+    """
+    import bisect
+
+    kept_sorted = sorted(kept_times)
+    out = []
+    for start, end, pitch, amp in stem_events:
+        if amp < min_amplitude or pitch < BASS_MIN_PITCH:
+            continue
+        if not any(t0 <= start < t1 for t0, t1 in runs_sec):
+            continue
+        i = bisect.bisect_left(kept_sorted, start)
+        near = [kept_sorted[j] for j in (i - 1, i) if 0 <= j < len(kept_sorted)]
+        if any(abs(start - k) < dedupe_s for k in near):
+            continue
+        lifted = pitch
+        while lifted < min_pitch:
+            lifted += 12
+        out.append((start, end, lifted, amp))
+        bisect.insort(kept_sorted, start)  # stems must not duplicate each other
+    return out
+
+
+def stem_rescue_events(events, tempo, stems: dict, progress=lambda m: None,
+                       min_pitch: int = MIN_PITCH,
+                       min_amplitude: float = MIN_AMPLITUDE):
+    """Transcribe isolated stems inside starved stretches and admit the finds.
+
+    The register fallback re-admits low notes the MIX transcription heard;
+    this goes further for the sections where the mix transcription itself
+    collapses (Toccata's growl breakdowns: 13-18 raw events per 10s).
+    Separation removes the masking, so Basic Pitch on the isolated bass and
+    "other" stems recovers lines the mix hides - the same UVR+Basic Pitch
+    scaffolding workflow the YARG charting wiki recommends to human charters,
+    and the separate-then-transcribe result the Cerberus/Jointist literature
+    reports. Only starved stretches are touched: elsewhere the mix
+    transcription is already the better witness (stem artifacts would only
+    add ghosts). "other" is admitted before bass so a recovered lead
+    outranks a duplicate bassline at the same moments.
+    """
+    runs = starved_runs(events, tempo, min_pitch, min_amplitude)
+    if not runs:
+        return []
+    import soundfile as sf
+    import tempfile
+    from pathlib import Path
+
+    from basic_pitch.inference import predict
+
+    from . import stems as stemsmod
+
+    kept_times = [s for s, _, p, a in events
+                  if p >= min_pitch and a >= min_amplitude]
+    admitted = []
+    for name in ("other", "bass"):
+        wav = stems.get(name)
+        if wav is None or not len(wav):
+            continue
+        tmp = Path(tempfile.gettempdir()) / f"chartgen_stem_{name}.wav"
+        try:
+            sf.write(str(tmp), wav, stemsmod.SR)
+            _, _, note_events = predict(str(tmp))
+        except Exception as error:  # rescue is a bonus, never fatal
+            progress(f"      stem rescue skipped for {name}: "
+                     f"{type(error).__name__}: {error}")
+            continue
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+        stem_events = [(float(s), float(e), int(p), float(a))
+                       for s, e, p, a, *_ in note_events]
+        new = admit_stem_events(stem_events, runs, kept_times,
+                                min_pitch, min_amplitude)
+        admitted.extend(new)
+        kept_times.extend(s for s, _, _, _ in new)
+    return admitted
+
+
 def bass_fallback_events(events, tempo,
                          min_pitch: int = MIN_PITCH,
                          min_amplitude: float = MIN_AMPLITUDE):

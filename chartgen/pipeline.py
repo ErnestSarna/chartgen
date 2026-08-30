@@ -132,11 +132,30 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
         check()
         progress("[3/6] building Expert from transcription")
         if not getattr(opts, "no_bass_fallback", False):
-            extra = transcribe.bass_fallback_events(events, tempo)
+            extra = []
+            if transcribe.starved_runs(events, tempo):
+                # Starved stretches first get the strong medicine: transcribe
+                # the isolated stems there (separation removes the masking
+                # that collapsed the mix transcription). Demucs results are
+                # cached, so lyrics/solos reuse this same separation later.
+                from . import stems as stemsmod
+
+                st = stemsmod.separate(str(audio), progress)
+                if st is not None:
+                    extra = transcribe.stem_rescue_events(events, tempo, st,
+                                                          progress)
+                    if extra:
+                        progress(f"      stem rescue: {len(extra)} note(s) "
+                                 f"transcribed from isolated stems where the "
+                                 f"mix transcription starves")
+            if not extra:
+                extra = transcribe.bass_fallback_events(events, tempo)
+                if extra:
+                    progress(f"      register fallback: {len(extra)} bass "
+                             f"note(s) admitted where the melodic selection "
+                             f"starves")
             if extra:
-                progress(f"      register fallback: {len(extra)} bass note(s) "
-                         f"admitted where the melodic selection starves")
-                events = events + extra
+                events = sorted(events + extra)
         swing = set()
         if getattr(opts, "swing", False):
             # Opt-in: on real songs the detected beat grid's local phase

@@ -426,6 +426,21 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             progress(f"      lanes: {relaned} note(s) reshaped into wrap "
                      f"chunks, chord-ladder rungs, or pickup roots")
 
+    if not getattr(opts, "keep_dense_chords", False):
+        from . import texture
+
+        # Second, LATE shape-smoothing pass. The early one runs before jump
+        # smoothing and playability enforcement, which re-anchor and knock
+        # out chords contextually - the same pad chord ends up shifted
+        # differently at different moments, and a final chart measured 69%
+        # same-shape adjacency where the demotion stage had produced 84%
+        # (playtest verdict: "messier"). Re-unifying here restores the
+        # strummed-run coherence the human norm (59.7%) is built on; the
+        # pass is chord-count-preserving and riff unification downstream
+        # then stamps coherent shapes instead of flickered ones.
+        expert = texture.smooth_chord_shapes(expert, res)
+        expert = texture.smooth_chord_shapes(expert, res)
+
     target_diff = getattr(opts, "target_diff", None)
     if target_diff is not None:
         natural = rating.rate_expert(expert, tempo)

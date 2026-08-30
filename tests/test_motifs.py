@@ -490,6 +490,30 @@ def test_ladder_needs_duration_evidence_and_a_higher_join():
     assert made == 0
 
 
+def test_ladder_keeps_gyb_but_pulls_a_leap_inward():
+    t = steady()
+    beat = RES
+    host_ev = [(t.beat_to_time(4), t.beat_to_time(5.5), 50, 0.6)]
+    # G host, Y then B joins: every step <=2, the legitimate span-3 stack
+    notes = [(4 * beat, 0, beat // 2), (4 * beat + beat // 4, 2, 0),
+             (4 * beat + beat // 2, 3, 0), (8 * beat, 0, 0)]
+    out, made = extend_ladders(notes, host_ev, t)
+    assert made == 1
+    assert lanes_at(out, 4 * beat + beat // 4) == [2], "G-Y-B must survive"
+    assert lanes_at(out, 4 * beat + beat // 2) == [3]
+    # G host, isolated B join (+3 leap): pulled inward to Y
+    notes = [(4 * beat, 0, beat // 2), (4 * beat + beat // 4, 3, 0),
+             (8 * beat, 0, 0)]
+    out, made = extend_ladders(notes, host_ev, t)
+    assert made == 1
+    assert lanes_at(out, 4 * beat + beat // 4) == [2], out
+    # same leap but the join is a chord: the ladder is vetoed, lanes stay
+    notes = [(4 * beat, 0, beat // 2), (4 * beat + beat // 4, 3, 0),
+             (4 * beat + beat // 4, 4, 0), (8 * beat, 0, 0)]
+    out, made = extend_ladders(notes, host_ev, t)
+    assert made == 0 and out == sorted(notes)
+
+
 def test_ladder_respects_budget_and_spacing():
     t = steady()
     beat = RES

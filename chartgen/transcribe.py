@@ -355,6 +355,7 @@ def extend_ladders(notes, events, tempo,
     lo, hi = (int(w * res) for w in LADDER_JOIN_WINDOW)
 
     stretch: dict[tuple[int, int], int] = {}
+    moved: dict[tuple[int, int], int] = {}
     last_ladder = -spacing
     made = 0
     for i, tick in enumerate(ticks):
@@ -370,7 +371,10 @@ def extend_ladders(notes, events, tempo,
             continue  # the sound itself is not hold-worthy
         # joins: later positions inside the join window, strictly above the
         # host lane, no opens, that the host's real sound rings through
-        joins = []
+        joins = []          # (tick, new_lane or None to keep)
+        relane: dict[int, int] = {}
+        top = host_lane     # highest lane in the stack so far
+        feasible = True
         for j in range(i + 1, n):
             jt = ticks[j]
             if jt - tick > hi:
@@ -378,25 +382,54 @@ def extend_ladders(notes, events, tempo,
             lanes = [l for _, l, _ in by_tick[jt]]
             if jt - tick < lo or OPEN in lanes or min(lanes) <= host_lane:
                 continue
-            if truth >= (jt - tick) + res // 4:
-                joins.append(jt)
+            if truth < (jt - tick) + res // 4:
+                continue
+            # Library norm: 76% of joins land 1-2 lanes above the stack's
+            # top - the awkward shape is one finger leaping a 3-4 lane gap
+            # mid-ladder, not total width (span-3 stacks like G-Y-B are a
+            # legitimate 25%). A wide SINGLE join with air after it pulls
+            # inward to the highest free lane within reach, mirroring the
+            # narrow-wide-chords doctrine; a wide join that cannot move (a
+            # chord, or mid-line) vetoes the ladder rather than shipping
+            # the leap.
+            jl = min(lanes)
+            if jl - top > 2:
+                used = {host_lane} | {l for _, l in joins}
+                target = next((c for c in (top + 2, top + 1)
+                               if 0 <= c <= 4 and c not in used), None)
+                after = ticks[j + 1] - jt if j + 1 < n else res
+                if (target is None or len(lanes) > 1 or after < res // 2):
+                    # An immovable leap as the FIRST join means the ladder
+                    # itself would be the gappy shape - veto. Later, it just
+                    # ends the stack: a one-join ladder is still a ladder.
+                    if not joins:
+                        feasible = False
+                    break
+                relane[jt] = target
+                jl = target
+            joins.append((jt, jl))
+            top = max(top, jl)
             if len(joins) >= 2:  # host + two joins = three lanes ringing
                 break
-        if not joins:
+        if not joins or not feasible:
             continue
         limit = next_on_lane[tick].get(host_lane)
         new_sus = min(truth, cap, (limit - tick - gap) if limit else cap)
-        if new_sus < (joins[0] - tick) + res // 4:
+        if new_sus < (joins[0][0] - tick) + res // 4:
             continue  # the overlap would be too short to read as a ladder
         if new_sus <= host_sus:
             continue
         stretch[(tick, host_lane)] = new_sus
+        for jt, target in relane.items():
+            old = min(l for _, l, _ in by_tick[jt])
+            moved[(jt, old)] = target
         last_ladder = tick
         made += 1
 
     if not stretch:
         return notes, 0
-    out = [(t, l, stretch.get((t, l), s)) for t, l, s in notes]
+    out = [(t, moved.get((t, l), l), stretch.get((t, l), s))
+           for t, l, s in notes]
     return sorted(out), made
 
 

@@ -147,6 +147,11 @@ def build_args(argv):
                          "Off by default: measured on real songs, beat-grid "
                          "phase error exceeds the 16th/triplet slot distance, "
                          "so detection misfires on straight songs")
+    ap.add_argument("--max-chord", type=int, choices=(2, 3), default=2,
+                    help="max simultaneous notes admitted per position at "
+                         "transcription (default 2; 3 lets three-note "
+                         "voicings through where three comparable-amplitude "
+                         "pitches coincide - experimental)")
     ap.add_argument("--no-brightness-lanes", action="store_true",
                     help="never re-lane stuck stretches from the spectral "
                          "contour; by default a long single-note run stuck "

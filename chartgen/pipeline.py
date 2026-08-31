@@ -172,7 +172,8 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
             min_sustain_beats=getattr(opts, 'min_sustain_beats', 0.5),
             allow_opens=getattr(opts, "opens", True),
             swing_beats=swing,
-            ornaments=not getattr(opts, "no_ornaments", False))
+            ornaments=not getattr(opts, "no_ornaments", False),
+            max_chord=int(getattr(opts, "max_chord", 2)))
         orn = sum(1 for t, _, _ in expert
                   if t % (res // 8) == 0 and t % (res // 4) != 0)
         if orn:

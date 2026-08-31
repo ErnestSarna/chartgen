@@ -134,6 +134,7 @@ def expert_from_notes(
     allow_opens: bool = True,
     swing_beats: set[int] = frozenset(),
     ornaments: bool = True,
+    max_chord: int = MAX_CHORD,
 ) -> list[tuple[int, int, int]]:
     """Chart-ready Expert notes [(tick, lane, sustain_ticks)].
 
@@ -177,7 +178,7 @@ def expert_from_notes(
 
     notes: list[tuple[int, int, int]] = []
     for tick in ticks:
-        group = sorted(by_tick[tick], reverse=True)[:MAX_CHORD]
+        group = sorted(by_tick[tick], reverse=True)[:max_chord]
         loudest = group[0][0]
         group = [g for g in group if g[0] >= loudest * CHORD_AMPLITUDE_RATIO]
         lanes: dict[int, float] = {}

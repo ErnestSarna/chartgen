@@ -292,6 +292,177 @@ def _add_ornaments(notes, kept, tempo, fret_of, swing_beats, min_amplitude):
     return sorted(notes + picked) if picked else notes
 
 
+# Triple riffs: the polished max-chord-3, built from the 800-chart triple
+# study + community doctrine (2026-08-30). Usage is BIMODAL - 42% of human
+# charts use triples heavily (user-median 7% of positions, punk 13%), the
+# rest barely at all - so this is a per-SONG decision, then a per-RUN
+# promotion: 56% of human triple-containing chord runs are pure-3, and the
+# rejected raw MAX_CHORD=3 failed precisely by per-tick coincidence mixing.
+# Gate thresholds from the 24-song calibration study (2026-08-30), set
+# EVIDENCE-led per the user's call, not chart-mimicry-led: human labels
+# are style (a charter may voice real triads as 2-note - vampire's piano
+# triads carry 96% recurrence and its chart has zero triples), so the
+# gate opens where the evidence itself is trustworthy. Users median 23%
+# evidence share vs nonusers 13%; above share>=0.15 AND recurrence>=0.75
+# every sampled song carries a genuine recurring third voice. Misses are
+# conservative (dense metalcore whose third voice transcription cannot
+# hear stays 2-note).
+TRIPLE_EV_SHARE = 0.15
+TRIPLE_EV_RECUR = 0.75
+# Evidence granularity is per SHAPE, not per tick: on Mary Jane the mix
+# transcription hears the chorus riff's third voice on only ~1 hit in 5
+# (masking varies strum to strum) even though 95% recurrence proves it is
+# the same voicing every time - a per-run 60% support bar silently
+# promoted nothing. RBN's own chord-consistency rule is shape-level: one
+# voicing per real chord, all song. A shape heard with its third voice
+# SHAPE_EVIDENCE_MIN times song-wide voices as a triple wherever it runs,
+# provided the run itself shows the voice at least once.
+TRIPLE_SHAPE_EVIDENCE_MIN = 3
+TRIPLE_RUN_SUPPORT = 0.20
+TRIPLE_RUN_MIN_CHORDS = 3
+TRIPLE_RUN_ON8_SHARE = 0.80
+# RBN's legal pool: adjacent + one-gap shapes; never Green AND Orange.
+LEGAL_TRIPLES = {(0, 1, 2), (1, 2, 3), (2, 3, 4),
+                 (0, 1, 3), (0, 2, 3), (1, 2, 4), (1, 3, 4)}
+
+
+def triple_song_evidence(events, tempo,
+                         min_pitch: int = MIN_PITCH,
+                         min_amplitude: float = MIN_AMPLITUDE):
+    """Is this a triple song? Evidence shares from the mix transcription."""
+    res = tempo.resolution
+    bar = res * 4
+    by_tick: dict[int, list] = {}
+    for s, e, p, a in events:
+        if p >= min_pitch and a >= min_amplitude:
+            by_tick.setdefault(tempo.quantize(s, subdiv=4), []).append((a, p))
+    chords = 0
+    three_pos = []
+    third_pitch: dict[int, float] = {}
+    for t, group in by_tick.items():
+        group = sorted(group, reverse=True)
+        comparable = [g for g in group
+                      if g[0] >= group[0][0] * CHORD_AMPLITUDE_RATIO]
+        if len(comparable) >= 2:
+            chords += 1
+            if len(comparable) >= 3:
+                three_pos.append(t)
+                third_pitch[t] = comparable[2][1]
+    offs: dict[int, set] = {}
+    for t in three_pos:
+        offs.setdefault(t % bar, set()).add(t // bar)
+    recur = sum(1 for t in three_pos if len(offs[t % bar]) >= 2)
+    share = len(three_pos) / max(1, chords)
+    recur_share = recur / max(1, len(three_pos))
+    return {
+        "share": share, "recur": recur_share, "third_pitch": third_pitch,
+        "qualifies": (share >= TRIPLE_EV_SHARE
+                      and recur_share >= TRIPLE_EV_RECUR
+                      and len(three_pos) >= 8),
+    }
+
+
+def promote_triple_runs(notes, evidence, tempo):
+    """Voice whole chord runs as triples where a third pitch supports them.
+
+    Grammar from the study + doctrine: promotion is per RUN (>=3 chords
+    within a beat of each other, >=80% on the 8th grid - human triples sit
+    median 100% on-8th), a run promotes only when >=60% of its chords carry
+    third-pitch evidence, every instance of a 2-note shape in the run takes
+    the SAME third lane (chord consistency: one voicing per real chord),
+    the added lane follows the third pitch's register (below/between/above
+    the charted pair), and the result must be one of the seven legal
+    shapes - adjacent or one-gap, never Green and Orange together. Runs
+    stay size-consistent by construction, which is what keeps the
+    same-shape adjacency that "cleaner" playtests ride on.
+    """
+    if not notes or not evidence["qualifies"]:
+        return notes, 0
+    res = tempo.resolution
+    third = evidence["third_pitch"]
+    by_tick: dict[int, list] = {}
+    for n in notes:
+        by_tick.setdefault(n[0], []).append(n)
+    ticks = sorted(by_tick)
+    fretted = {t: sorted(l for _, l, _ in by_tick[t] if l != OPEN)
+               for t in ticks}
+    chord_ticks = [t for t in ticks if len(fretted[t]) == 2]
+
+    runs = []
+    cur: list[int] = []
+    for t in chord_ticks:
+        if cur and t - cur[-1] > res:
+            if len(cur) >= TRIPLE_RUN_MIN_CHORDS:
+                runs.append(cur)
+            cur = []
+        cur.append(t)
+    if len(cur) >= TRIPLE_RUN_MIN_CHORDS:
+        runs.append(cur)
+
+    def third_lane(shape, direction):
+        lo, hi = shape
+        options = {"below": [lo - 1], "above": [hi + 1],
+                   "between": list(range(lo + 1, hi))}
+        order = {"below": ["below", "between", "above"],
+                 "above": ["above", "between", "below"],
+                 "between": ["between", "above", "below"]}[direction]
+        for kind in order:
+            for lane in options[kind]:
+                cand = tuple(sorted({lo, hi, lane}))
+                if len(cand) == 3 and cand in LEGAL_TRIPLES:
+                    return lane
+        return None
+
+    # song-wide evidence per 2-note shape (the chord-consistency unit)
+    shape_evidence: dict[tuple, int] = {}
+    for t in chord_ticks:
+        if t in third:
+            s = tuple(fretted[t])
+            shape_evidence[s] = shape_evidence.get(s, 0) + 1
+
+    added: dict[int, int] = {}
+    promoted_runs = 0
+    for run in runs:
+        on8 = sum(1 for t in run if t % (res // 2) == 0)
+        if on8 < len(run) * TRIPLE_RUN_ON8_SHARE:
+            continue
+        support = sum(1 for t in run if t in third)
+        if support < max(1, len(run) * TRIPLE_RUN_SUPPORT):
+            continue
+        if not all(shape_evidence.get(tuple(fretted[t]), 0)
+                   >= TRIPLE_SHAPE_EVIDENCE_MIN for t in run):
+            continue
+        # one third-lane decision per 2-note shape in this run
+        by_shape: dict[tuple, list] = {}
+        for t in run:
+            by_shape.setdefault(tuple(fretted[t]), []).append(t)
+        run_added = {}
+        for shape, members in by_shape.items():
+            # Doctrine default for the added voice: fill the gap when the
+            # pair has one (a split shape gains its middle), else stack
+            # upward - voicings are pitch-ordered and the layered note
+            # "plays a higher or dissonant note over it" per RBN.
+            direction = "between" if shape[1] - shape[0] >= 2 else "above"
+            lane = third_lane(shape, direction)
+            if lane is None:
+                run_added = {}
+                break
+            for t in members:
+                run_added[t] = lane
+        if not run_added:
+            continue
+        added.update(run_added)
+        promoted_runs += 1
+
+    if not added:
+        return notes, 0
+    out = list(notes)
+    for t, lane in added.items():
+        sus = max(s for _, _, s in by_tick[t])
+        out.append((t, lane, sus))
+    return sorted(set(out)), promoted_runs
+
+
 # Register fallback: below this is kick fundamentals and rumble, never a
 # melodic bassline worth charting.
 BASS_MIN_PITCH = 24

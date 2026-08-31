@@ -24,12 +24,15 @@ from chartgen.motifs import (  # noqa: E402
 from chartgen.structure import unify_riff_bars  # noqa: E402
 from chartgen.tempo import RESOLUTION, TempoMap  # noqa: E402
 from chartgen.transcribe import (  # noqa: E402
+    LEGAL_TRIPLES,
     admit_stem_events,
     bass_fallback_events,
     expert_from_notes,
     extend_ladders,
+    promote_triple_runs,
     starved_runs,
     swung_beats,
+    triple_song_evidence,
 )
 
 RES = RESOLUTION  # 480
@@ -626,6 +629,70 @@ def test_ladder_respects_budget_and_spacing():
     # 4-beat minimum spacing: of six candidates 2 beats apart, every
     # other one ladders
     assert made == 3, made
+
+
+# ---------------------------------------------------------------- triples
+
+def _triple_song_events(t, bars=6, third=True):
+    """A chord riff: G+Y power chords on every 8th, with (optionally) a
+    comparable third pitch, recurring bar after bar."""
+    ev = []
+    for b in range(bars):
+        for k in range(8):
+            s = t.beat_to_time(b * 4 + k * 0.5)
+            ev.append((s, s + 0.2, 50, 0.6))
+            ev.append((s, s + 0.2, 57, 0.55))
+            if third:
+                ev.append((s, s + 0.2, 62, 0.5))
+    return ev
+
+
+def test_triple_evidence_gates_bimodally():
+    t = steady()
+    yes = triple_song_evidence(_triple_song_events(t, third=True), t)
+    assert yes["qualifies"], yes
+    no = triple_song_evidence(_triple_song_events(t, third=False), t)
+    assert not no["qualifies"], no
+    # a scatter of one-off third pitches (no recurrence) must not qualify
+    ev = _triple_song_events(t, third=False)
+    for i, b in enumerate(range(0, 24, 3)):  # varying bar offsets, once each
+        s = t.beat_to_time(b + (i % 7) * 0.5)
+        ev.append((s, s + 0.2, 62, 0.5))
+    scatter = triple_song_evidence(ev, t)
+    assert scatter["recur"] < 0.5 or not scatter["qualifies"], scatter
+
+
+def test_promote_triple_runs_uniform_and_legal():
+    t = steady()
+    ev = triple_song_evidence(_triple_song_events(t), t)
+    assert ev["qualifies"]
+    eighth = RES // 2
+    notes = [(i * eighth, lane, 0) for i in range(12) for lane in (0, 2)]
+    out, promoted = promote_triple_runs(notes, ev, t)
+    assert promoted >= 1
+    for i in range(12):
+        lanes = tuple(lanes_at(out, i * eighth))
+        assert len(lanes) == 3, f"run must promote uniformly: {lanes}"
+        assert lanes in LEGAL_TRIPLES, lanes
+    # non-qualifying song: untouched
+    no = triple_song_evidence(_triple_song_events(t, third=False), t)
+    out2, promoted2 = promote_triple_runs(notes, no, t)
+    assert promoted2 == 0 and out2 == sorted(set(notes))
+
+
+def test_promote_skips_offgrid_and_short_runs():
+    t = steady()
+    ev = triple_song_evidence(_triple_song_events(t), t)
+    sixteenth = RES // 4
+    # a 16th-offset chord run (off the 8th grid) stays 2-note
+    notes = [(i * (RES // 2) + sixteenth, lane, 0)
+             for i in range(12) for lane in (0, 2)]
+    out, promoted = promote_triple_runs(notes, ev, t)
+    assert promoted == 0
+    # two chords only: below the run floor
+    short = [(i * (RES // 2), lane, 0) for i in range(2) for lane in (0, 2)]
+    out, promoted = promote_triple_runs(short, ev, t)
+    assert promoted == 0
 
 
 # ---------------------------------------------------------------- brightness

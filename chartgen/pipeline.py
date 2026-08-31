@@ -185,6 +185,21 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
             after = len({t for t, _, _ in expert})
             if before > after:
                 progress(f"      density: {before} -> {after} positions")
+        if not getattr(opts, "no_triple_riffs", False):
+            ev = transcribe.triple_song_evidence(events, tempo)
+            if ev["qualifies"]:
+                expert, promoted = transcribe.promote_triple_runs(
+                    expert, ev, tempo)
+                if promoted:
+                    progress(f"      triple riffs: {promoted} chord run(s) "
+                             f"voiced as three-note (evidence share "
+                             f"{ev['share']:.0%}; 42% of human charts are "
+                             f"triple songs)")
+                else:
+                    # A qualifying song promoting nothing must say so - the
+                    # stairs no-op bug hid behind exactly this silence.
+                    progress(f"      triple song (evidence {ev['share']:.0%})"
+                             f" but no chord run met the promotion grammar")
         if not expert:
             raise ValueError(
                 "transcription found no chartable notes — is this audio "

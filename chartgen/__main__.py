@@ -147,6 +147,11 @@ def build_args(argv):
                          "Off by default: measured on real songs, beat-grid "
                          "phase error exceeds the 16th/triplet slot distance, "
                          "so detection misfires on straight songs")
+    ap.add_argument("--no-triple-riffs", action="store_true",
+                    help="never voice chord runs as three-note chords; by "
+                         "default a song whose transcription shows recurring "
+                         "third voices promotes whole chord runs to triples "
+                         "(42%% of human charts are triple songs)")
     ap.add_argument("--max-chord", type=int, choices=(2, 3), default=2,
                     help="max simultaneous notes admitted per position at "
                          "transcription (default 2; 3 lets three-note "

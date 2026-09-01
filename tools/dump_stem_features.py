@@ -68,17 +68,37 @@ def main(argv=None):
         other_times = (np.arange(len(other_rms)) + 0.5) * 0.05
         o_mean = float(other_rms.mean())
         o_std = float(other_rms.std()) or 1e-9
+        # Guitar-stem evidence (SW backend only): the "featured line vs
+        # accompaniment" signal every previous solo sweep lacked. Recorded
+        # here so ONE separation pass serves both the controlled backend
+        # comparison and the guitar-aware re-sweep. Same frame grid as
+        # other_rms, so the section windows line up.
+        guitar_rms = None
+        if "guitar" in mono:
+            _, guitar_rms = stemsmod.activity(mono["guitar"])
+            g_mean = float(guitar_rms.mean())
+            g_std = float(guitar_rms.std()) or 1e-9
+            canon = {k: stemsmod.activity(mono[k])[1]
+                     for k in ("drums", "bass", "other", "vocals")}
 
         rows = []
         for section in song["sections"]:
             t0 = tmap.beat_to_time(section["start"] / res)
             t1 = tmap.beat_to_time(section["end"] / res)
             window = (other_times >= t0) & (other_times < t1)
-            rows.append({
+            row = {
                 "singing": stemsmod.singing_share(vocal, stemsmod.SR, t0, t1),
                 "lead": (float(other_rms[window].mean()) - o_mean) / o_std
                         if window.any() else 0.0,
-            })
+            }
+            if guitar_rms is not None and window.any():
+                n = min(len(window), len(guitar_rms))
+                w = window[:n]
+                total = sum(float(v[:n][w].mean()) for v in canon.values())
+                row["guitar"] = (float(guitar_rms[:n][w].mean()) - g_mean) / g_std
+                row["guitar_share"] = (float(guitar_rms[:n][w].mean()) / total
+                                       if total > 0 else 0.0)
+            rows.append(row)
         out.append({"name": song["name"], "stem_sections": rows})
         args.out.write_text(json.dumps(out), encoding="utf-8")
         print(f"  [{i}/{len(songs)}] {song['name'][:48]:<50} "

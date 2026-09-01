@@ -796,27 +796,64 @@ def test_second_voices_needs_comparable_pair():
     assert (lo, hi) == (50, 57)
 
 
-def test_chordify_adds_by_interval_and_respects_cap():
+def test_chordify_promotes_a_run_uniformly():
     t = steady()
-    beat = RES
-    voices = {beat: (50, 57), 2 * beat: (50, 53)}  # fifth, then a third
-    notes = [(beat, 1, 0), (2 * beat, 1, 0), (3 * beat, 0, 0)]
-    # filler singles so the chord-share cap is not binding on a tiny chart
-    notes += [((10 + i) * beat, 0, 0) for i in range(10)]
-    out, added = chordify(notes, voices, RES)
-    assert added == 2
-    assert lanes_at(out, beat) == [1, 3], "fifth -> power-chord shape (+2)"
-    assert lanes_at(out, 2 * beat) == [1, 2], "third -> adjacent (+1)"
-    assert lanes_at(out, 3 * beat) == [0], "no evidence, no chord"
-    # existing chords and opens untouched
-    notes = [(beat, 1, 0), (beat, 3, 0), (2 * beat, 7, 0)]
-    out, added = chordify(notes, {beat: (50, 57), 2 * beat: (50, 57)}, RES)
+    eighth = RES // 2
+    run = [(i * eighth, 1, 0) for i in range(6)]
+    filler = [((20 + i) * RES, 0, 0) for i in range(20)]  # keeps the cap open
+    # evidence on 4 of 6 positions, all fifths -> +2 for the whole run
+    voices = {i * eighth: (50, 57) for i in (0, 1, 3, 5)}
+    out, added = chordify(run + filler, voices, RES)
+    assert added == 6, "the whole run promotes, not just evidenced ticks"
+    for i in range(6):
+        assert lanes_at(out, i * eighth) == [1, 3], i
+    # a third-interval majority gives the adjacent shape instead
+    voices = {i * eighth: (50, 53) for i in (0, 1, 3, 5)}
+    out, _ = chordify(run + filler, voices, RES)
+    assert lanes_at(out, 0) == [1, 2]
+
+
+def test_chordify_skips_thin_evidence_and_short_runs():
+    t = steady()
+    eighth = RES // 2
+    run = [(i * eighth, 1, 0) for i in range(6)]
+    filler = [((20 + i) * RES, 0, 0) for i in range(20)]
+    # one evidenced tick out of six: below the run-support bar
+    out, added = chordify(run + filler, {0: (50, 57)}, RES)
     assert added == 0
-    # cap: a chart already at the ceiling gains nothing
-    dense = [(i * beat, lane, 0) for i in range(10) for lane in (0, 2)]
-    v = {i * beat: (50, 57) for i in range(10)}
-    out, added = chordify(dense, v, RES)
-    assert added == 0, "already all chords: cap blocks"
+    # a two-position run is not a riff
+    short = [(0, 1, 0), (eighth, 1, 0)]
+    out, added = chordify(short + filler, {0: (50, 57), eighth: (50, 57)}, RES)
+    assert added == 0
+
+
+def test_chordify_keeps_one_direction_per_run():
+    t = steady()
+    eighth = RES // 2
+    # lanes 1,1,1,4: +2 fits three of four; the outlier must stay single
+    lanes = [1, 1, 1, 4]
+    run = [(i * eighth, lane, 0) for i, lane in enumerate(lanes)]
+    filler = [((20 + i) * RES, 0, 0) for i in range(20)]
+    voices = {i * eighth: (50, 57) for i in range(4)}
+    out, added = chordify(run + filler, voices, RES)
+    assert added == 3
+    for i in range(3):
+        assert lanes_at(out, i * eighth) == [1, 3]
+    assert lanes_at(out, 3 * eighth) == [4], "no flipped shape on the outlier"
+
+
+def test_chordify_leaves_chords_opens_and_respects_cap():
+    eighth = RES // 2
+    voices = {i * eighth: (50, 57) for i in range(6)}
+    # existing chords and opens are never touched
+    notes = [(i * eighth, lane, 0) for i in range(3) for lane in (1, 3)]
+    notes += [((3 + i) * eighth, OPEN, 0) for i in range(3)]
+    out, added = chordify(notes, voices, RES)
+    assert added == 0
+    # a chart already at the chord ceiling gains nothing
+    dense = [(i * eighth, lane, 0) for i in range(10) for lane in (0, 2)]
+    out, added = chordify(dense, {i * eighth: (50, 57) for i in range(10)}, RES)
+    assert added == 0
 
 
 def test_guitar_share_separates_silence():

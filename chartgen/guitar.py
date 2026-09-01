@@ -17,16 +17,10 @@ voice where the guitar plays two. So where the isolated guitar stem's own
 transcription shows a second comparable voice at a tick the chart left as
 a single note, the second lane is added - evidence-backed, never invented.
 
-Separation runs as a subprocess of the bs-roformer-infer CLI (MIT, weights
-auto-cached under ~/.cache/bs-roformer-infer). Everything degrades
-gracefully: no package, no GPU headroom, or no guitar in the song means no
-changes, same as every stems consumer.
+Separation itself lives in chartgen.stems (one pass per song, shared with
+lyrics/solos/taps/rescue). Everything degrades gracefully: no SW backend,
+or no guitar in the song, means no changes.
 """
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
-
 import numpy as np
 
 OPEN = 7
@@ -42,44 +36,37 @@ MIN_GUITAR_SHARE = 0.10
 COMPARABLE = 0.65
 # Human punk tops out around 67% chord positions; never chordify past this.
 MAX_CHORD_SHARE = 0.55
+# Run-uniform promotion (the shape-coherence fix): a run of singles gains
+# the second voice as a unit or not at all, so the riff keeps one shape.
+# The support bar is LOW for the same reason the triple rule's is: the stem
+# transcribes the second voice on roughly one strum in five, so a 50% bar
+# promoted 12 runs where the evidence really supports ~100 (measured on
+# Mary Jane). Two evidenced ticks in a run is the floor that keeps a single
+# stray from voicing a whole phrase.
+CHORDIFY_RUN_SUPPORT = 0.20
+CHORDIFY_MIN_EVIDENCED = 2
+CHORDIFY_MIN_RUN = 3
+CHORDIFY_RUN_GAP_BEATS = 1.0
 # Interval -> added-lane offset, per RBN chord feel: small intervals are
 # "small" adjacent chords, fourths/fifths are the 1-3 power-chord default.
 POWER_CHORD_SEMITONES = 5
 
 
 def separate_guitar(audio_path: str, progress=lambda m: None):
-    """Mono guitar stem at 44.1kHz via the SW model, or None on any failure."""
-    try:
-        import librosa
-        import soundfile as sf
+    """The song's mono guitar stem, or None when no guitar-capable backend
+    ran. Delegates to chartgen.stems so a song is separated ONCE and every
+    consumer (lyrics, solos, taps, rescue, this) shares the result - the
+    dual-separation cost of the first version is gone."""
+    from . import stems as stemsmod
 
-        with tempfile.TemporaryDirectory(prefix="chartgen_sw_") as tmp:
-            tmp = Path(tmp)
-            (tmp / "in").mkdir()
-            y, _ = librosa.load(str(audio_path), sr=SW_SR, mono=False)
-            if y.ndim == 1:
-                y = np.stack([y, y])
-            sf.write(str(tmp / "in" / "song.wav"), y.T, SW_SR)
-            progress("      separating guitar stem (BS-RoFormer SW)")
-            exe = Path(sys.executable).parent / "bs-roformer-infer.exe"
-            cmd = [str(exe) if exe.is_file() else "bs-roformer-infer",
-                   "--input_folder", str(tmp / "in"),
-                   "--store_dir", str(tmp / "out")]
-            run = subprocess.run(cmd, capture_output=True, text=True,
-                                 timeout=900)
-            if run.returncode != 0:
-                progress(f"      guitar stem unavailable "
-                         f"({run.stderr.strip().splitlines()[-1][:80] if run.stderr.strip() else 'separator failed'})")
-                return None
-            out = tmp / "out" / "song_guitar.wav"
-            if not out.is_file():
-                return None
-            g, sr = sf.read(str(out), dtype="float32", always_2d=True)
-            return g.mean(axis=1)
-    except Exception as error:  # never fail a chart over a bonus signal
-        progress(f"      guitar stem unavailable "
-                 f"({type(error).__name__}: {error})")
+    # Explicitly SW: it is the only backend with a guitar stem, and the
+    # 12-song A/B did not justify making it everyone's default (see
+    # chartgen.stems). A guitar song therefore separates twice - the cost
+    # of not changing calibrated consumers underneath their thresholds.
+    mono = stemsmod.separate(str(audio_path), progress, backend="sw")
+    if not mono:
         return None
+    return mono.get("guitar")
 
 
 def guitar_share(guitar, mix_energy_stems=None) -> float:
@@ -120,15 +107,36 @@ def second_voices(guitar_events, tempo,
     return out
 
 
-def chordify(notes, voices, resolution: int):
-    """Add the guitar's second voice to single notes the mix heard alone.
+def _runs(ticks, resolution):
+    """Group positions into runs separated by more than a beat of air."""
+    runs, cur = [], []
+    for t in ticks:
+        if cur and t - cur[-1] > resolution * CHORDIFY_RUN_GAP_BEATS:
+            runs.append(cur)
+            cur = []
+        cur.append(t)
+    if cur:
+        runs.append(cur)
+    return runs
 
-    Only at ticks where the isolated guitar stem transcribes two comparable
-    voices; the added lane's direction and distance follow the interval
-    (small interval = adjacent lane, fourth/fifth+ = the 1-3 power-chord
-    shape). Chords the chart already has are left alone, opens are left
-    alone, and the song-wide chord share is capped at the punk-band
-    ceiling so no evidence glut can flood a chart.
+
+def chordify(notes, voices, resolution: int):
+    """Give whole single-note RUNS the guitar's second voice, uniformly.
+
+    Per-tick addition was the first version and it repeated the mistake
+    raw MAX_CHORD=3 made: evidence arrives at scattered ticks (the stem
+    transcribes the second voice on some strums and not others), so the
+    chart gained chords in a flicker pattern and same-shape adjacency fell
+    80% -> 73% on a playtested song. Humans voice a RIFF, not a tick.
+
+    So a run of singles (positions within a beat of each other, at least
+    CHORDIFY_MIN_RUN long) is promoted as a unit when enough of its
+    positions carry stem evidence: one interval offset for the whole run,
+    decided by majority vote across the evidenced ticks, and one direction,
+    chosen as whichever fits more of the run on the neck. Positions the
+    shape does not fit stay single - a passing note, not a flipped shape.
+    Existing chords and opens are untouched, and the song-wide chord share
+    is still capped at the punk-band ceiling.
     """
     if not notes or not voices:
         return notes, 0
@@ -136,32 +144,47 @@ def chordify(notes, voices, resolution: int):
     for n in notes:
         by_tick.setdefault(n[0], []).append(n)
     ticks = sorted(by_tick)
-    n_pos = len(ticks)
-    chords_now = sum(
-        1 for t in ticks
-        if len([x for x in by_tick[t] if x[1] != OPEN]) >= 2)
-    budget = int(MAX_CHORD_SHARE * n_pos) - chords_now
+    chords_now = sum(1 for t in ticks
+                     if len([x for x in by_tick[t] if x[1] != OPEN]) >= 2)
+    budget = int(MAX_CHORD_SHARE * len(ticks)) - chords_now
     if budget <= 0:
         return notes, 0
 
-    added = []
-    for t in ticks:
-        if budget <= 0:
-            break
-        if t not in voices:
-            continue
+    def lone_lane(t):
         group = by_tick[t]
         fretted = [x for x in group if x[1] != OPEN]
         if len(fretted) != 1 or any(x[1] == OPEN for x in group):
+            return None
+        return fretted[0][1]
+
+    singles = [t for t in ticks if lone_lane(t) is not None]
+    added = []
+    for run in _runs(singles, resolution):
+        if budget <= 0:
+            break
+        if len(run) < CHORDIFY_MIN_RUN:
             continue
-        lane = fretted[0][1]
-        lo, hi = voices[t]
-        offset = 2 if hi - lo >= POWER_CHORD_SEMITONES else 1
-        new_lane = lane + offset if lane + offset <= 4 else lane - offset
-        if not 0 <= new_lane <= 4 or new_lane == lane:
+        evidenced = [t for t in run if t in voices]
+        if (len(evidenced) < CHORDIFY_MIN_EVIDENCED
+                or len(evidenced) < len(run) * CHORDIFY_RUN_SUPPORT):
             continue
-        added.append((t, new_lane, fretted[0][2]))
-        budget -= 1
+        # one offset for the run: majority interval among evidenced ticks
+        votes = [2 if voices[t][1] - voices[t][0] >= POWER_CHORD_SEMITONES
+                 else 1 for t in evidenced]
+        offset = 2 if votes.count(2) >= votes.count(1) else 1
+        # one direction: whichever keeps more of the run on the neck
+        up = sum(1 for t in run if lone_lane(t) + offset <= 4)
+        down = sum(1 for t in run if lone_lane(t) - offset >= 0)
+        step = offset if up >= down else -offset
+        for t in run:
+            if budget <= 0:
+                break
+            lane = lone_lane(t)
+            new_lane = lane + step
+            if not 0 <= new_lane <= 4:
+                continue  # passing note: stays single, shape stays uniform
+            added.append((t, new_lane, by_tick[t][0][2]))
+            budget -= 1
     if not added:
         return notes, 0
     return sorted(set(notes + added)), len(added)

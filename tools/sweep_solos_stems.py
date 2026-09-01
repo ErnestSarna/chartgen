@@ -32,12 +32,17 @@ WORK = Path(__file__).resolve().parent.parent / "work"
 FEATURES = ("voiced", "confidence", "spread", "bright", "novelty")
 
 
-def load_songs():
+def load_songs(stems_tag: str = ""):
+    """stems_tag selects which stem-feature dump joins in: "" for the
+    Demucs-era cal_stems_A/B.json, "sw" for cal_stems_A_sw/B_sw.json -
+    the same sections and ground truth, only the separator differs, which
+    is what makes a recalibration under a new backend a controlled test."""
     songs = [s for name in ("cal_solo_A.json", "cal_solo_B.json")
              for s in json.loads((WORK / name).read_text(encoding="utf-8"))]
     songs = list({s["name"]: s for s in songs}.values())
     stems = {}
-    for name in ("cal_stems_A.json", "cal_stems_B.json"):
+    suffix = f"_{stems_tag}" if stems_tag else ""
+    for name in (f"cal_stems_A{suffix}.json", f"cal_stems_B{suffix}.json"):
         path = WORK / name
         if path.exists():
             for row in json.loads(path.read_text(encoding="utf-8")):
@@ -116,7 +121,14 @@ def evaluate(songs, weights, lead_w, max_sing, min_beats, pos_lo, pos_hi,
 
 
 def main(argv=None):
-    songs = load_songs()
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--stems-tag", default="",
+                    help='stem dump variant to join ("" = Demucs, "sw")')
+    args = ap.parse_args(argv)
+    songs = load_songs(args.stems_tag)
+    print(f"stems: {args.stems_tag or 'demucs'}")
     print(f"{len(songs)} songs with stem features, "
           f"{sum(len(s['truth']) for s in songs)} solos\n")
 

@@ -156,7 +156,14 @@ def foreground_by_span(spans_s, mono, sr, centroid=None, cen_times=None):
     """
     hop = int(0.05 * sr)
     envs = {}
+    # Only the four canonical stems count toward the total: the SW shim in
+    # chartgen.stems also returns guitar/piano/sw_other, whose energy is
+    # ALREADY inside its reconstructed "other" - summing every key would
+    # double-count it and silently shrink every share.
+    canonical = ("drums", "bass", "other", "vocals")
     for name, stem in mono.items():
+        if name not in canonical:
+            continue
         n = len(stem) // hop
         envs[name] = np.sqrt((stem[:n * hop].reshape(n, hop) ** 2).mean(axis=1))
     frames = len(next(iter(envs.values())))

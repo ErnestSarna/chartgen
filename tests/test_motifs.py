@@ -774,6 +774,60 @@ def test_brightness_respects_chords_sustains_and_opens():
     assert lanes_at(out, notes[5][0])[0] != 7, "open inside sweep gets a fret"
 
 
+# ---------------------------------------------------------------- guitar
+
+from chartgen.guitar import (  # noqa: E402
+    MAX_CHORD_SHARE,
+    chordify,
+    guitar_share,
+    second_voices,
+)
+
+
+def test_second_voices_needs_comparable_pair():
+    t = steady()
+    beat_s = t.beat_to_time(4)
+    ev = [(beat_s, beat_s + 0.3, 50, 0.6), (beat_s, beat_s + 0.3, 57, 0.5),
+          (t.beat_to_time(5), t.beat_to_time(5) + 0.3, 50, 0.6),
+          (t.beat_to_time(5), t.beat_to_time(5) + 0.3, 62, 0.1)]  # ghost
+    v = second_voices(ev, t)
+    assert len(v) == 1
+    (tick, (lo, hi)), = v.items()
+    assert (lo, hi) == (50, 57)
+
+
+def test_chordify_adds_by_interval_and_respects_cap():
+    t = steady()
+    beat = RES
+    voices = {beat: (50, 57), 2 * beat: (50, 53)}  # fifth, then a third
+    notes = [(beat, 1, 0), (2 * beat, 1, 0), (3 * beat, 0, 0)]
+    # filler singles so the chord-share cap is not binding on a tiny chart
+    notes += [((10 + i) * beat, 0, 0) for i in range(10)]
+    out, added = chordify(notes, voices, RES)
+    assert added == 2
+    assert lanes_at(out, beat) == [1, 3], "fifth -> power-chord shape (+2)"
+    assert lanes_at(out, 2 * beat) == [1, 2], "third -> adjacent (+1)"
+    assert lanes_at(out, 3 * beat) == [0], "no evidence, no chord"
+    # existing chords and opens untouched
+    notes = [(beat, 1, 0), (beat, 3, 0), (2 * beat, 7, 0)]
+    out, added = chordify(notes, {beat: (50, 57), 2 * beat: (50, 57)}, RES)
+    assert added == 0
+    # cap: a chart already at the ceiling gains nothing
+    dense = [(i * beat, lane, 0) for i in range(10) for lane in (0, 2)]
+    v = {i * beat: (50, 57) for i in range(10)}
+    out, added = chordify(dense, v, RES)
+    assert added == 0, "already all chords: cap blocks"
+
+
+def test_guitar_share_separates_silence():
+    sr = 44100
+    loud = np.random.RandomState(0).randn(sr * 20).astype(np.float32) * 0.1
+    silent = np.zeros(sr * 20, dtype=np.float32)
+    assert guitar_share(loud) > 0.5
+    assert guitar_share(silent) == 0.0
+    assert guitar_share(None) == 0.0
+
+
 # ---------------------------------------------------------------- writing
 
 def test_forced_flags_written_expert_only():

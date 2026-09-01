@@ -185,6 +185,39 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
             after = len({t for t, _, _ in expert})
             if before > after:
                 progress(f"      density: {before} -> {after} positions")
+        if not getattr(opts, "no_guitar_texture", False):
+            from . import guitar as guitarmod
+
+            positions = {}
+            for t, l, _ in expert:
+                positions.setdefault(t, set()).add(l)
+            share = (sum(1 for v in positions.values()
+                         if len(v - {7}) >= 2) / max(1, len(positions)))
+            if share >= guitarmod.TRIGGER_CHORD_SHARE:
+                g = guitarmod.separate_guitar(str(audio), progress)
+                gshare = guitarmod.guitar_share(g)
+                if gshare >= guitarmod.MIN_GUITAR_SHARE:
+                    progress(f"      guitar stem active ({gshare:.0%}); "
+                             f"transcribing it for chord texture")
+                    import soundfile as sf
+                    import tempfile as tf
+
+                    with tf.NamedTemporaryFile(suffix=".wav", delete=False) as fh:
+                        gpath = fh.name
+                    try:
+                        sf.write(gpath, g, guitarmod.SW_SR)
+                        gevents = transcribe.transcribe(gpath)
+                    finally:
+                        Path(gpath).unlink(missing_ok=True)
+                    voices = guitarmod.second_voices(gevents, tempo)
+                    expert, added = guitarmod.chordify(expert, voices, res)
+                    if added:
+                        progress(f"      guitar texture: {added} single(s) "
+                                 f"gained the guitar's second voice (humans "
+                                 f"chart 50-100% chords on strummed songs)")
+                elif g is not None:
+                    progress(f"      guitar stem quiet ({gshare:.0%}); "
+                             f"chord texture unchanged")
         if not getattr(opts, "no_triple_riffs", False):
             ev = transcribe.triple_song_evidence(events, tempo)
             if ev["qualifies"]:

@@ -78,13 +78,22 @@ def candidates(song, max_run=3):
                                for g, w in zip(group, weights)) / total,
                 "lead": sum(g["stem"]["lead"] * w
                             for g, w in zip(group, weights)) / total,
+                # Guitar-stem evidence (SW dumps only; 0 under Demucs):
+                # the featured-line-vs-accompaniment signal earlier sweeps
+                # lacked. z = surge against the song's own guitar baseline.
+                "guitar": sum(g["stem"].get("guitar", 0.0) * w
+                              for g, w in zip(group, weights)) / total,
+                "guitar_share": sum(g["stem"].get("guitar_share", 0.0) * w
+                                    for g, w in zip(group, weights)) / total,
             })
     return out
 
 
 def evaluate(songs, weights, lead_w, max_sing, min_beats, pos_lo, pos_hi,
-             threshold, top_k, min_iou=0.25):
+             threshold, top_k, min_iou=0.25, guitar_w=0.0, min_guitar=0.0):
     tp = fp = fn = 0
+    quiet = 0  # solo-less songs that still got a solo: the bar that killed
+    quiet_total = 0  # every earlier rule above 2% recall
     for song in songs:
         res, last = song["resolution"], song["last_tick"]
         picks = []
@@ -96,8 +105,10 @@ def evaluate(songs, weights, lead_w, max_sing, min_beats, pos_lo, pos_hi,
                 continue
             if s["singing"] > max_sing or s["notes"] < 16:
                 continue
+            if s["guitar_share"] < min_guitar:
+                continue
             score = sum(weights[k] * s["z"][k] for k in FEATURES) \
-                + lead_w * s["lead"]
+                + lead_w * s["lead"] + guitar_w * s["guitar"]
             if score >= threshold:
                 picks.append((score, s["start"], s["end"]))
         picks.sort(reverse=True)
@@ -108,6 +119,10 @@ def evaluate(songs, weights, lead_w, max_sing, min_beats, pos_lo, pos_hi,
             if len(chosen) >= top_k:
                 break
         truth = [tuple(t) for t in song["truth"]]
+        if not truth:
+            quiet_total += 1
+            if chosen:
+                quiet += 1
         hits = [g for g in chosen if any(iou(g, t) >= min_iou for t in truth)]
         tp += len(hits)
         fp += len(chosen) - len(hits)
@@ -117,7 +132,7 @@ def evaluate(songs, weights, lead_w, max_sing, min_beats, pos_lo, pos_hi,
     f_half = (1.25 * precision * recall / (0.25 * precision + recall)) \
         if precision + recall else 0.0
     return {"precision": precision, "recall": recall, "f_half": f_half,
-            "tp": tp, "fp": fp}
+            "tp": tp, "fp": fp, "quiet": quiet, "quiet_total": quiet_total}
 
 
 def main(argv=None):
@@ -134,25 +149,44 @@ def main(argv=None):
 
     base = {"voiced": 0.5, "confidence": 0, "spread": 1.0, "bright": 0.0,
             "novelty": 1.0}
+    has_guitar = any("guitar" in sec.get("stem", {})
+                     for song in songs for sec in song["sections"])
+    guitar_grid = (list(itertools.product((0, 1.0, 1.5, 2.0, 3.0, 4.0), (0.0, 0.10)))
+                   if has_guitar else [(0.0, 0.0)])
+    print(f"guitar features: {'yes' if has_guitar else 'no'} "
+          f"({len(guitar_grid)} guitar settings)")
     rows = []
     for lead_w, max_sing in itertools.product((0, 0.5, 1.0, 1.5), (0.15, 0.25, 0.4, 1.0)):
         for pos in ((0.45, 0.80), (0.25, 0.92), (0.10, 0.95)):
             for z, k, mb in itertools.product((1.0, 1.25, 1.5, 2.0), (1, 2), (32, 48)):
-                r = evaluate(songs, base, lead_w, max_sing, mb, pos[0], pos[1], z, k)
-                r["rule"] = (f"lead{lead_w} sing<={max_sing} pos{pos[0]}-{pos[1]} "
-                             f"beats>={mb} z>={z} top{k}")
-                rows.append(r)
+                for gw, gsh in guitar_grid:
+                    r = evaluate(songs, base, lead_w, max_sing, mb, pos[0],
+                                 pos[1], z, k, guitar_w=gw, min_guitar=gsh)
+                    r["rule"] = (f"lead{lead_w} sing<={max_sing} pos{pos[0]}-{pos[1]} "
+                                 f"beats>={mb} z>={z} top{k}"
+                                 + (f" g{gw} gsh>={gsh}" if has_guitar else ""))
+                    rows.append(r)
+
+    def show(r):
+        print(f"  {r['rule']:<64}{r['precision']:>5.0%}{r['recall']:>6.0%}  "
+              f"(tp{r['tp']} fp{r['fp']} quiet{r['quiet']}/{r['quiet_total']})")
 
     rows.sort(key=lambda r: -r["f_half"])
     print("top by F0.5:")
     for r in rows[:8]:
-        print(f"  {r['rule']:<52}{r['precision']:>5.0%}{r['recall']:>6.0%}  "
-              f"(tp{r['tp']} fp{r['fp']})")
-    print("\nprecision-first (recall >= 8%):")
+        show(r)
+    print()
+    print("precision-first (recall >= 8%):")
     good = [r for r in rows if r["recall"] >= 0.08]
     for r in sorted(good, key=lambda r: (-r["precision"], -r["recall"]))[:8]:
-        print(f"  {r['rule']:<52}{r['precision']:>5.0%}{r['recall']:>6.0%}  "
-              f"(tp{r['tp']} fp{r['fp']})")
+        show(r)
+    print()
+    print("zero-quiet-fire rules by recall (the shipping bar):")
+    clean = [r for r in rows if r["quiet"] == 0 and r["tp"] > 0]
+    for r in sorted(clean, key=lambda r: (-r["recall"], -r["precision"]))[:8]:
+        show(r)
+    if not clean:
+        print("  (none)")
     return 0
 
 

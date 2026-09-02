@@ -882,14 +882,6 @@ def test_forced_flags_written_expert_only():
     assert "N 5" not in hard, "forcing is spacing-relative: Expert only"
 
 
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok  {name}")
-    print("\nall checks passed")
-
-
 def test_merge_triple_evidence_pools_sources():
     t = steady()
     mix = triple_song_evidence(_triple_song_events(t, third=True), t)
@@ -912,3 +904,11 @@ def test_merge_triple_evidence_pools_sources():
     weak = triple_song_evidence(_triple_song_events(t, third=False), t)
     assert not weak["qualifies"]
     assert merge_triple_evidence(weak, gtr, t)["qualifies"]
+
+
+if __name__ == "__main__":
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print(f"ok  {name}")
+    print("\nall checks passed")

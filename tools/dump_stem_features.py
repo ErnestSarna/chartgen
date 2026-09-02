@@ -43,9 +43,22 @@ def main(argv=None):
 
     songs = json.loads(args.cache.read_text(encoding="utf-8"))
     folders = {p.name: p for p in args.library.iterdir() if p.is_dir()}
+    # Resumable: a paused or interrupted run keeps every song already
+    # written (the file is rewritten after each song), so a relaunch
+    # continues instead of paying the separation cost again.
     out = []
+    if args.out.exists():
+        try:
+            out = json.loads(args.out.read_text(encoding="utf-8"))
+        except ValueError:
+            out = []  # killed mid-write: start over rather than trust it
+    done = {row["name"] for row in out}
+    if done:
+        print(f"  resuming: {len(done)} song(s) already dumped", flush=True)
     started = time.time()
     for i, song in enumerate(songs, 1):
+        if song["name"] in done:
+            continue
         folder = folders.get(song["name"])
         audio = find_audio(folder) if folder else None
         if audio is None:

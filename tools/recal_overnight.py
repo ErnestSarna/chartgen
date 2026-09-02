@@ -50,9 +50,8 @@ def main(argv=None):
     if not args.skip_solos:
         for tag in ("A", "B"):
             out = WORK / f"cal_stems_{tag}_sw.json"
-            if out.exists():
-                print(f"solos {tag}: {out.name} exists, skipping dump")
-                continue
+            # No exists-skip: both dump tools resume from their own output,
+            # so a relaunch after a pause continues where it stopped.
             run([PY, ROOT / "tools/dump_stem_features.py",
                  WORK / f"cal_solo_{tag}.json", "-o", out],
                 env={"CHARTGEN_STEMS": "sw"})

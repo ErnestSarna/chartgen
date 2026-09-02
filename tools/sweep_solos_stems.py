@@ -37,12 +37,18 @@ def load_songs(stems_tag: str = ""):
     Demucs-era cal_stems_A/B.json, "sw" for cal_stems_A_sw/B_sw.json -
     the same sections and ground truth, only the separator differs, which
     is what makes a recalibration under a new backend a controlled test."""
-    songs = [s for name in ("cal_solo_A.json", "cal_solo_B.json")
+    # A and B are the solo-having sets; Q is the 100-song solo-less control
+    # set (built from the frame cache's quiet flags), present only once
+    # tools/dump_solo_features.py has run on it. Without Q every rule
+    # trivially shows zero quiet fires - the bar cannot be evaluated.
+    songs = [s for name in ("cal_solo_A.json", "cal_solo_B.json", "cal_solo_Q.json")
+             if (WORK / name).exists()
              for s in json.loads((WORK / name).read_text(encoding="utf-8"))]
     songs = list({s["name"]: s for s in songs}.values())
     stems = {}
     suffix = f"_{stems_tag}" if stems_tag else ""
-    for name in (f"cal_stems_A{suffix}.json", f"cal_stems_B{suffix}.json"):
+    for name in (f"cal_stems_A{suffix}.json", f"cal_stems_B{suffix}.json",
+                 f"cal_stems_Q{suffix}.json"):
         path = WORK / name
         if path.exists():
             for row in json.loads(path.read_text(encoding="utf-8")):

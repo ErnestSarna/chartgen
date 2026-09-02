@@ -185,6 +185,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
             after = len({t for t, _, _ in expert})
             if before > after:
                 progress(f"      density: {before} -> {after} positions")
+        gevents = None  # guitar-stem transcription, shared with triples
         if not getattr(opts, "no_guitar_texture", False):
             from . import guitar as guitarmod
 
@@ -220,14 +221,22 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                              f"chord texture unchanged")
         if not getattr(opts, "no_triple_riffs", False):
             ev = transcribe.triple_song_evidence(events, tempo)
+            if gevents is not None:
+                # The guitar stem hears the third voice on different strums
+                # than the mix does; pooling them is free evidence.
+                ev = transcribe.merge_triple_evidence(
+                    ev, transcribe.triple_song_evidence(gevents, tempo), tempo)
             if ev["qualifies"]:
                 expert, promoted = transcribe.promote_triple_runs(
                     expert, ev, tempo)
                 if promoted:
+                    extra = ev.get("guitar_ticks", 0)
                     progress(f"      triple riffs: {promoted} chord run(s) "
                              f"voiced as three-note (evidence share "
-                             f"{ev['share']:.0%}; 42% of human charts are "
-                             f"triple songs)")
+                             f"{ev['share']:.0%}"
+                             + (f", +{extra} ticks from the guitar stem"
+                                if extra else "")
+                             + "; 42% of human charts are triple songs)")
                 else:
                     # A qualifying song promoting nothing must say so - the
                     # stairs no-op bug hid behind exactly this silence.

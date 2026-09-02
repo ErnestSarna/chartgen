@@ -362,6 +362,37 @@ def triple_song_evidence(events, tempo,
     }
 
 
+def merge_triple_evidence(mix_ev, guitar_ev, tempo):
+    """Pool the mix's and the guitar stem's third-voice evidence.
+
+    Both transcriptions hear the third voice on roughly one strum in five,
+    but on DIFFERENT strums: Mary Jane's mix evidence and guitar-stem
+    evidence overlapped on a handful of ticks out of 74 + 59 (2026-09-02),
+    so the union carries ~1.6x the ticks of either alone and promotes
+    2-4x the runs under the unchanged shape-level grammar. Nothing new is
+    invented - every tick still comes from a transcription that heard a
+    third comparable voice there; the guitar stem's pitch wins where both
+    heard one, since it is the isolated instrument. The song gate passes
+    when EITHER source certifies a recurring third voice; recurrence is
+    recomputed on the pooled ticks for the log.
+    """
+    if not guitar_ev or not guitar_ev["third_pitch"]:
+        return mix_ev
+    bar = tempo.resolution * 4
+    third = {**mix_ev["third_pitch"], **guitar_ev["third_pitch"]}
+    offs: dict[int, set] = {}
+    for t in third:
+        offs.setdefault(t % bar, set()).add(t // bar)
+    recur = sum(1 for t in third if len(offs[t % bar]) >= 2)
+    return {
+        "share": max(mix_ev["share"], guitar_ev["share"]),
+        "recur": recur / max(1, len(third)),
+        "third_pitch": third,
+        "guitar_ticks": len(set(guitar_ev["third_pitch"]) - set(mix_ev["third_pitch"])),
+        "qualifies": mix_ev["qualifies"] or guitar_ev["qualifies"],
+    }
+
+
 def promote_triple_runs(notes, evidence, tempo):
     """Voice whole chord runs as triples where a third pitch supports them.
 

@@ -29,6 +29,7 @@ from chartgen.transcribe import (  # noqa: E402
     bass_fallback_events,
     expert_from_notes,
     extend_ladders,
+    merge_triple_evidence,
     promote_triple_runs,
     starved_runs,
     swung_beats,
@@ -887,3 +888,27 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("\nall checks passed")
+
+
+def test_merge_triple_evidence_pools_sources():
+    t = steady()
+    mix = triple_song_evidence(_triple_song_events(t, third=True), t)
+    # guitar stem hears the third voice on OTHER strums: the same riff on
+    # the off-16ths, so its ticks are disjoint from the mix's 8ths
+    shift = t.beat_to_time(0.25) - t.beat_to_time(0.0)
+    shifted = [(s + shift, e + shift, p, a)
+               for s, e, p, a in _triple_song_events(t, third=True)]
+    gtr = triple_song_evidence(shifted, t)
+    merged = merge_triple_evidence(mix, gtr, t)
+    assert merged["qualifies"]
+    assert len(merged["third_pitch"]) == len(mix["third_pitch"]) + len(gtr["third_pitch"])
+    assert merged["guitar_ticks"] == len(gtr["third_pitch"])
+    assert set(mix["third_pitch"]) <= set(merged["third_pitch"])
+    # no guitar evidence: the mix evidence passes through untouched
+    assert merge_triple_evidence(mix, None, t) is mix
+    empty = triple_song_evidence([], t)
+    assert merge_triple_evidence(mix, empty, t) is mix
+    # a non-qualifying mix still qualifies when the stem certifies it
+    weak = triple_song_evidence(_triple_song_events(t, third=False), t)
+    assert not weak["qualifies"]
+    assert merge_triple_evidence(weak, gtr, t)["qualifies"]

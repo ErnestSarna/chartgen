@@ -59,10 +59,9 @@ def separate_guitar(audio_path: str, progress=lambda m: None):
     dual-separation cost of the first version is gone."""
     from . import stems as stemsmod
 
-    # Explicitly SW: it is the only backend with a guitar stem, and the
-    # 12-song A/B did not justify making it everyone's default (see
-    # chartgen.stems). A guitar song therefore separates twice - the cost
-    # of not changing calibrated consumers underneath their thresholds.
+    # Explicitly SW: it is the only backend with a guitar stem. SW is also
+    # the default since the 2026-09-02 recalibration, so this hits the
+    # same cache entry every other consumer uses - one separation per song.
     mono = stemsmod.separate(str(audio_path), progress, backend="sw")
     if not mono:
         return None

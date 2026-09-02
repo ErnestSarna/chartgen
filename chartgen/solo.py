@@ -89,6 +89,21 @@ MIN_Z = 1.25  # 0.5 standard deviations x the total weight of 2.5
 LEAD_WEIGHT = 2.0
 MIN_Z_STEMS = 1.5
 MAX_SOLOS = 2           # human median is 1, max 3
+# Guitar-stem rule (BS-RoFormer SW, 2026-09-02). The evidence class every
+# earlier sweep lacked: the guitar stem's surge against the song's own
+# guitar baseline, plus a guitar PRESENCE gate and a vocal-silence gate.
+# Controlled recalibration on 299 solo songs + 100 solo-less controls:
+# zero-quiet-fire rules plateau at 83% precision / 7% recall, and the
+# rule below was picked by 7 of 10 half-splits, scoring 82% / 6% held-out
+# with ~1 quiet fire per 50 controls. The Demucs-era family cannot reach
+# zero quiet fires above 2% recall, and its usable rules fire on 14-22 of
+# the same 100 controls. lead is ZERO here: guitar surge replaces the
+# "other"-stem term. Without a guitar stem the lead rule above still runs.
+GUITAR_WEIGHT = 2.0
+MIN_GUITAR_SHARE = 0.10   # a solo needs a real guitar in the section
+MAX_SINGING = 0.40        # vocal stem active in <= 40% of the span
+MIN_Z_GUITAR = 1.25
+MIN_BEATS_GUITAR = 32.0   # the split-halves chose 32 over 48 every time
 
 
 def _section_spans(section_marks, last_tick, resolution):
@@ -247,6 +262,30 @@ def _lead_evidence(audio_path, progress):
         return None
 
 
+def _guitar_evidence(audio_path, progress):
+    """Per-frame guitar surge stats, canonical envelopes and the vocal stem,
+    from the SW backend - or None when it did not run (then the Demucs-era
+    lead rule applies unchanged)."""
+    if not audio_path:
+        return None
+    try:
+        import numpy as np
+
+        from . import stems as stemsmod
+
+        mono = stemsmod.separate(str(audio_path), progress, backend="sw")
+        if not mono or "guitar" not in mono:
+            return None
+        _, g_rms = stemsmod.activity(mono["guitar"])
+        canon = {k: stemsmod.activity(mono[k])[1] for k in stemsmod.DEMUCS_STEMS}
+        times = (np.arange(len(g_rms)) + 0.5) * 0.05
+        return {"times": times, "guitar": g_rms,
+                "mean": float(g_rms.mean()), "std": float(g_rms.std()) or 1e-9,
+                "canon": canon, "vocal": mono["vocals"]}
+    except Exception:
+        return None
+
+
 def detect(expert, section_marks, lyric_events, y, sr, tempo,
            progress=lambda m: None, audio_path=None) -> list[tuple[int, int]]:
     """[(start_tick, end_tick)] where the audio carries a lead break.
@@ -271,13 +310,17 @@ def detect(expert, section_marks, lyric_events, y, sr, tempo,
     if rows is None:
         return []
 
-    lead = _lead_evidence(audio_path, progress)
-    threshold = MIN_Z_STEMS if lead else MIN_Z
+    guitar = _guitar_evidence(audio_path, progress)
+    lead = None if guitar else _lead_evidence(audio_path, progress)
+    if guitar:
+        threshold, min_beats = MIN_Z_GUITAR, MIN_BEATS_GUITAR
+    else:
+        threshold, min_beats = (MIN_Z_STEMS if lead else MIN_Z), MIN_BEATS
 
     scored = []
     for start, end, z in _candidates(spans, rows, resolution):
         beats = (end - start) / resolution
-        if not (MIN_BEATS <= beats <= MAX_BEATS):
+        if not (min_beats <= beats <= MAX_BEATS):
             continue
         if not (MIN_POS <= start / last <= MAX_POS):
             continue
@@ -289,10 +332,23 @@ def detect(expert, section_marks, lyric_events, y, sr, tempo,
         if len(inside) < 16:
             continue
         score = sum(WEIGHTS[k] * z[k] for k in FEATURES)
-        if lead:
+        t0 = tempo.beat_to_time(start / resolution)
+        t1 = tempo.beat_to_time(end / resolution)
+        if guitar:
+            from . import stems as stemsmod
+
+            window = (guitar["times"] >= t0) & (guitar["times"] < t1)
+            if not window.any():
+                continue
+            if stemsmod.singing_share(guitar["vocal"], stemsmod.SR, t0, t1) > MAX_SINGING:
+                continue
+            total = sum(float(v[window].mean()) for v in guitar["canon"].values())
+            g_mean = float(guitar["guitar"][window].mean())
+            if total <= 0 or g_mean / total < MIN_GUITAR_SHARE:
+                continue
+            score += GUITAR_WEIGHT * (g_mean - guitar["mean"]) / guitar["std"]
+        elif lead:
             times, rms, mean, std = lead
-            t0 = tempo.beat_to_time(start / resolution)
-            t1 = tempo.beat_to_time(end / resolution)
             window = (times >= t0) & (times < t1)
             if window.any():
                 score += LEAD_WEIGHT * (float(rms[window].mean()) - mean) / std
@@ -309,5 +365,6 @@ def detect(expert, section_marks, lyric_events, y, sr, tempo,
             chosen.append((start, end))
         if len(chosen) >= MAX_SOLOS:
             break
-    progress(f"      {len(chosen)} solo(s) from lead-line evidence")
+    progress(f"      {len(chosen)} solo(s) from "
+             f"{'guitar-stem' if guitar else 'lead-line'} evidence")
     return sorted(chosen)

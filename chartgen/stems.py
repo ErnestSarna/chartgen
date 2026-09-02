@@ -4,7 +4,7 @@ Two backends behind one contract. Callers always receive mono float32 at
 `SR` under the four Demucs-era names (drums, bass, other, vocals), so no
 consumer needs to know which model ran.
 
-- "sw"     BS-RoFormer SW, six stems. Better on every stem we consume
+- "sw"     BS-RoFormer SW, six stems, THE DEFAULT. Better on every stem we consume
            (vocals 11.3 vs 8.3 SDR, bass 14.6 vs 12.1, drums 14.1 vs 11.2)
            and it adds a real guitar stem (9.05), which is what made
            "is a strummed guitar playing chords here" answerable at all:
@@ -13,23 +13,25 @@ consumer needs to know which model ran.
            signal had measured identical. Runs ~34-48s per song on an
            RTX 3060 Ti via the bs-roformer-infer CLI (MIT code, ~700MB
            weights auto-cached under ~/.cache/bs-roformer-infer).
-- "demucs" htdemucs, four stems, ~8s per song. THE DEFAULT, and the
-           reference every current threshold was calibrated against.
+- "demucs" htdemucs, four stems, ~8s per song. The fallback, and the
+           reference the original thresholds were calibrated against.
 
-Why Demucs is still the default, from the 12-song A/B against human-chart
-ground truth (tools-era harness, 2026-08-31): SW wins where its extra
-quality is measurable - vocal-stem singing detection 0.99 vs 0.96 AUC
-against human lyric events, stem-rescue precision 0.28 vs 0.13 against
-human note times - but shows NO measurable gain on the two consumers that
-carry calibrated thresholds (solo lead separation 0.57 vs 0.60 AUC, tap
-section separation 0.42 vs 0.52, both noisy and near chance for either
-backend), while costing 37s against 8s. Taps v3 in particular thresholds
-ABSOLUTE stem shares, and a separator swap moves absolute energy
-distributions, so switching it blind would be exactly the untested
-threshold change this project keeps getting burned by. SW therefore runs
-where it is uniquely enabling (the guitar stem) and stays available by
-name everywhere else; promoting it to default is gated on recalibrating
-taps and solos, not on more opinion.
+SW became the DEFAULT on 2026-09-02 after a controlled overnight
+recalibration - same songs, same human-chart truth, same sweep code, only
+the separator differing - cleared every consumer:
+- taps (799 songs, 4733 sections): SW 42%p/44%r vs Demucs 40%p/40%r at
+  each backend's optimum, 42/18 vs 41/16 at the production thresholds;
+  the tapped-vs-untapped share gap is wider (0.079 vs 0.056) and the
+  production rule behaves the same under both, so nothing moved
+  underneath calibrated features;
+- solos: a wash on the old lead rule (62/11 vs 61/11), but the guitar stem
+  SW alone provides gives chartgen.solo a rule at 82% precision held-out
+  with ~1 quiet fire per 50 solo-less songs, where the Demucs-era family
+  could not pass 2% recall without firing on 14-22 of 100;
+- vocals and stem rescue: 0.99 vs 0.96 AUC and 0.28 vs 0.13 precision in
+  the 12-song A/B.
+Cost: ~37s vs ~8s per song, paid once - the guitar pass no longer
+separates a second time.
 
 THE COMPATIBILITY POINT: SW carves guitar and piano OUT of "other", so its
 "other" is not the same thing Demucs called "other" - a solo detector
@@ -139,7 +141,7 @@ def separate(audio_path: str, progress=lambda m: None,
     With SW available the dict also carries 'guitar', 'piano' and
     'sw_other'. backend: 'sw', 'demucs', or None for the env/default.
     """
-    backend = backend or os.environ.get(BACKEND_ENV) or "demucs"
+    backend = backend or os.environ.get(BACKEND_ENV) or "sw"
     key = (str(audio_path), backend)
     if key in _CACHE:
         return _CACHE[key]

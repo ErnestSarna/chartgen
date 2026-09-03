@@ -1490,6 +1490,38 @@ def test_tap_sections_classify_by_foreground_dominance():
     assert fg[1][0] <= FOREGROUND_HARD_SHARE, fg
 
 
+def test_tap_sections_key_on_piano_synth_minus_guitar():
+    """Taps v4 (six-stem study, 2026-09-03): charters tap where the guitar
+    stem is silent and piano/synth carry the section. A piano-led span
+    scores high, a guitar-led span negative, a shared span in between;
+    without the true stems the helper declines so v3 takes over."""
+    from chartgen.taps import (keys_by_span, KEYS_TAP_SHARE,
+                               KEYS_NO_TAP_SHARE, TRUE_STEMS)
+
+    sr = 44100
+    q = np.full(20 * sr, 0.01, dtype=np.float32)
+    L = np.full(20 * sr, 0.3, dtype=np.float32)
+    # 0-20s piano over a beat, 20-40s guitar band, 40-60s piano and guitar
+    # sharing the foreground equally.
+    mono = {
+        "drums": np.concatenate([q * 8, L, L]),
+        "bass": np.concatenate([q, L, L]),
+        "vocals": np.concatenate([q * 0, L, L]),
+        "guitar": np.concatenate([q * 0, L * 1.5, L]),
+        "piano": np.concatenate([L, q * 0, L]),
+        "sw_other": np.concatenate([q, q, q]),
+    }
+    mono["other"] = mono["guitar"] + mono["piano"] + mono["sw_other"]  # shim
+    spans = [(0.0, 20.0), (20.0, 40.0), (40.0, 60.0)]
+    keyed = keys_by_span(spans, mono, sr)
+    assert keyed[0] >= KEYS_TAP_SHARE, keyed
+    assert keyed[1] <= KEYS_NO_TAP_SHARE, keyed
+    assert KEYS_NO_TAP_SHARE < keyed[2] < KEYS_TAP_SHARE, keyed
+    four = {k: mono[k] for k in ("drums", "bass", "other", "vocals")}
+    assert keys_by_span(spans, four, sr) is None
+    assert set(TRUE_STEMS) <= set(mono)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

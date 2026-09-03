@@ -60,6 +60,24 @@ FOREGROUND_SOFT_SHARE = 0.60   # other-stem dominance: section taps whole
 FOREGROUND_HARD_SHARE = 0.35   # below: band/vocal foreground, no taps
 SOFT_MAX_CENTROID_HZ = 2500.0
 
+# Taps v4: INSTRUMENT keying on BS-RoFormer SW's true stems. The v3 rule
+# above reads the shim's "other", which sums guitar, piano and the synth
+# residual - and that sum CANCELS the signal. Six-stem study (2026-09-03,
+# tools/dump_taps_stems.py + sweep_taps_stems.py; 300 songs, 1822 scored
+# sections, 710 tapped-whole): charters tap where the guitar stem is
+# silent and piano/synth carry the section. Median tapped vs untapped:
+# guitar share 0.00 vs 0.21, piano+synth 0.30 vs 0.05. The keyed score
+# share(piano) + share(synth) - share(guitar) separates at AUC 0.86
+# (shim 0.58); the shim's best rule reaches 51% precision at 47% recall,
+# this one 75%/77%, and split-half by song holds 69-79% precision with
+# the threshold stable at 0.06-0.12. Below the lower bar the section is
+# a band/guitar foreground: 6% of those are tapped by humans, so none
+# tap; the middle band taps 33% of the time and falls through to the
+# phrase logic. Centroid gates added nothing and are not used here.
+KEYS_TAP_SHARE = 0.09      # keyed score at/above: section taps whole
+KEYS_NO_TAP_SHARE = -0.09  # keyed score at/below: guitar/band, no taps
+TRUE_STEMS = ("drums", "bass", "vocals", "guitar", "piano", "sw_other")
+
 
 def _samples(feature, times, when):
     """Strongest value within one frame either side, like density.py."""
@@ -181,16 +199,47 @@ def foreground_by_span(spans_s, mono, sr, centroid=None, cen_times=None):
     return out
 
 
+def keys_by_span(spans_s, mono, sr):
+    """Keyed foreground score per (t0, t1) span, or None without the six
+    true SW stems: share(piano) + share(synth residual) - share(guitar),
+    each a share of the six true stems' summed RMS energy (no shim
+    "other", so nothing is double counted)."""
+    if any(k not in mono for k in TRUE_STEMS):
+        return None
+    hop = int(0.05 * sr)
+    envs = {}
+    for name in TRUE_STEMS:
+        stem = mono[name]
+        n = len(stem) // hop
+        if n < 1:
+            return None
+        envs[name] = np.sqrt((stem[:n * hop].reshape(n, hop) ** 2).mean(axis=1))
+    frames = min(len(e) for e in envs.values())
+    out = []
+    for t0, t1 in spans_s:
+        a = max(0, min(frames - 1, int(t0 / 0.05)))
+        b = max(a + 1, min(frames, int(t1 / 0.05)))
+        means = {k: float(e[a:b].mean()) for k, e in envs.items()}
+        total = sum(means.values())
+        if total <= 0:
+            out.append(0.0)
+            continue
+        out.append((means["piano"] + means["sw_other"] - means["guitar"]) / total)
+    return out
+
+
 def detect(notes, y, sr, tempo, progress=lambda m: None,
            audio_path=None, section_marks=None) -> set[int]:
     """Tap ticks for this chart, or an empty set when nothing reads soft.
 
-    Two-level decision. Sections classify by their FOREGROUND: when the
-    melodic stem dominates the section (a piano-led passage, beat or no
-    beat) and reads soft, the whole section taps; when a band/vocal
-    foreground holds it, none of it does; genuinely shared foregrounds
-    fall through to the phrase logic on de-drummed audio. Without stems
-    or sections the old full-mix behaviour stands.
+    Two-level decision. Sections classify by their FOREGROUND. With the
+    six true SW stems (v4): a keys/synth-led section (piano + synth share
+    minus guitar share >= KEYS_TAP_SHARE) taps whole, a guitar/band-led
+    one (<= KEYS_NO_TAP_SHARE) not at all, the middle falls through to
+    the phrase logic on de-drummed audio. With only the four Demucs-style
+    stems (v3): the melodic stem's dominance plus a centroid guard decide
+    the same three ways. Without stems or sections the old full-mix
+    behaviour stands.
     """
     res = tempo.resolution
     ticks = sorted({t for t, _, _ in notes})
@@ -226,24 +275,43 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
                for a, b in spans]
     import librosa
 
-    other_ds = librosa.resample(mono["other"], orig_sr=stemsmod.SR,
-                                target_sr=22050)
-    centroid = librosa.feature.spectral_centroid(y=other_ds, sr=22050)[0]
-    cen_times = librosa.times_like(centroid, sr=22050)
-    fg = foreground_by_span(spans_s, mono, stemsmod.SR, centroid, cen_times)
-
     chosen: set[int] = set()
     mixed_notes = []
-    soft_sections = 0
-    for (a, b), (share, bright) in zip(spans, fg):
-        inside = [n for n in notes if a <= n[0] < b]
-        if not inside:
-            continue
-        if share >= FOREGROUND_SOFT_SHARE and bright <= SOFT_MAX_CENTROID_HZ:
-            chosen.update(t for t, _, _ in inside)
-            soft_sections += 1
-        elif share > FOREGROUND_HARD_SHARE:
-            mixed_notes.extend(inside)
+    soft_sections = band_sections = 0
+    keyed = keys_by_span(spans_s, mono, stemsmod.SR)
+    if keyed is not None:
+        # v4: instrument keying on the true stems (see KEYS_TAP_SHARE).
+        rule = "keys/synth"
+        for (a, b), score in zip(spans, keyed):
+            inside = [n for n in notes if a <= n[0] < b]
+            if not inside:
+                continue
+            if score >= KEYS_TAP_SHARE:
+                chosen.update(t for t, _, _ in inside)
+                soft_sections += 1
+            elif score > KEYS_NO_TAP_SHARE:
+                mixed_notes.extend(inside)
+            else:
+                band_sections += 1
+    else:
+        # v3: shim/Demucs foreground dominance with a centroid guard.
+        rule = "soft"
+        other_ds = librosa.resample(mono["other"], orig_sr=stemsmod.SR,
+                                    target_sr=22050)
+        centroid = librosa.feature.spectral_centroid(y=other_ds, sr=22050)[0]
+        cen_times = librosa.times_like(centroid, sr=22050)
+        fg = foreground_by_span(spans_s, mono, stemsmod.SR, centroid, cen_times)
+        for (a, b), (share, bright) in zip(spans, fg):
+            inside = [n for n in notes if a <= n[0] < b]
+            if not inside:
+                continue
+            if share >= FOREGROUND_SOFT_SHARE and bright <= SOFT_MAX_CENTROID_HZ:
+                chosen.update(t for t, _, _ in inside)
+                soft_sections += 1
+            elif share > FOREGROUND_HARD_SHARE:
+                mixed_notes.extend(inside)
+            else:
+                band_sections += 1
 
     if mixed_notes:
         # De-drummed audio: the melodic content without the kit, resampled
@@ -259,8 +327,9 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
         except Exception:
             pass
 
-    if chosen:
-        share = len(chosen) / max(1, len(ticks))
-        progress(f"      taps: {len(chosen)} notes ({share:.0%}) - "
-                 f"{soft_sections} soft section(s) tapped whole")
+    share = len(chosen) / max(1, len(ticks))
+    progress(f"      taps: {len(chosen)} notes ({share:.0%}) - "
+             f"{soft_sections} {rule} section(s) tapped whole, "
+             f"{band_sections} band/guitar section(s) untouched, "
+             f"{len(mixed_notes)} notes in shared sections went to phrase logic")
     return chosen

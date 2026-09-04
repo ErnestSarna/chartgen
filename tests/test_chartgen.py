@@ -1520,12 +1520,12 @@ def test_tap_sections_key_on_piano_synth_minus_guitar():
     four = {k: mono[k] for k in ("drums", "bass", "other", "vocals")}
     assert keys_by_span(spans, four, sr) is None
     assert set(TRUE_STEMS) <= set(mono)
-    # Inside a keyed section chords stay strummed (humans tap 1.7% chords
-    # per tap-song median); singles and opens tap.
+    # A keyed section taps whole, chords included: mixing taps and strums
+    # inside one section was playtested on Clocks and rejected.
     from chartgen.taps import section_tap_ticks
     inside = [(0, 0, 0), (100, 1, 0), (100, 2, 0), (200, 7, 0), (300, 3, 0)]
-    assert section_tap_ticks(inside) == {0, 200, 300}
-    assert section_tap_ticks(inside, tap_chords=True) == {0, 100, 200, 300}
+    assert section_tap_ticks(inside) == {0, 100, 200, 300}
+    assert section_tap_ticks(inside, tap_chords=False) == {0, 200, 300}
 
 
 if __name__ == "__main__":

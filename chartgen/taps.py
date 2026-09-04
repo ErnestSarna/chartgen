@@ -77,14 +77,15 @@ SOFT_MAX_CENTROID_HZ = 2500.0
 KEYS_TAP_SHARE = 0.09      # keyed score at/above: section taps whole
 KEYS_NO_TAP_SHARE = -0.09  # keyed score at/below: guitar/band, no taps
 TRUE_STEMS = ("drums", "bass", "vocals", "guitar", "piano", "sw_other")
-# Inside a keyed section, chords stay strummed. Library-wide (800 charts):
-# 11.9% of human-tapped positions are chords vs 28.5% of untapped ones,
-# and per tap-song the median chord share among tapped notes is 1.7%
-# (51% of tap songs tap <=2% chords). Faded's human chart taps 400 notes
-# with ZERO chords while its 274 untapped notes are 32% chords - the
-# synth-chord drops are strummed, the lead runs tapped. Sustains show no
-# such split (9.3% vs 11.4%), so they tap with their section.
-TAP_CHORDS_IN_KEYED_SECTIONS = False
+# A keyed section taps WHOLE, chords included. The library statistic that
+# argued otherwise (11.9% of human-tapped positions are chords vs 28.5%
+# untapped; Faded's charter taps 400 notes and zero chords) describes how
+# charters VOICE tapped passages - as single-note lines - not a habit of
+# strumming the chords inside them. Leaving chords strummed inside a
+# tapped section was playtested on Clocks (2026-09-03) and rejected
+# outright: "definitely no mixing taps and strums together, it's awful",
+# and the piano intro, charted with chords, lost most of its taps.
+TAP_CHORDS_IN_KEYED_SECTIONS = True
 
 
 def _samples(feature, times, when):

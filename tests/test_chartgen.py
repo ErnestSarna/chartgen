@@ -1528,6 +1528,30 @@ def test_tap_sections_key_on_piano_synth_minus_guitar():
     assert section_tap_ticks(inside, tap_chords=False) == {0, 200, 300}
 
 
+def test_rapid_chords_demote_a_chord_beside_a_16th_single():
+    """Bisected Clocks regression (playability finger-lift fix let it
+    through): a chord with a single within a 16th on either side demotes
+    to its root; chords a full 8th from any single keep their shape."""
+    from chartgen import reduce
+
+    res = 192
+    six = res // 4
+    # chord, single a 16th later, chord: both chords demote to roots
+    notes = [(0, 0, 0), (0, 1, 0), (six, 2, 0), (2 * six, 0, 0), (2 * six, 1, 0)]
+    out = reduce.simplify_rapid_chords(notes, res)
+    lanes = {}
+    for t, l, _ in out:
+        lanes.setdefault(t, set()).add(l)
+    assert lanes[0] == {0} and lanes[2 * six] == {0} and lanes[six] == {2}, lanes
+    # same chords an 8th apart from a single on the grid: chord survives
+    notes = [(0, 0, 0), (0, 1, 0), (res // 2, 2, 0), (res, 0, 0), (res, 1, 0)]
+    out = reduce.simplify_rapid_chords(notes, res)
+    lanes = {}
+    for t, l, _ in out:
+        lanes.setdefault(t, set()).add(l)
+    assert lanes[0] == {0, 1} and lanes[res] == {0, 1}, lanes
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

@@ -384,14 +384,43 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
                if any((t + d * bar) in off_grid_chords
                       and (t + d * bar) % bar == t % bar
                       for d in (-2, -1, 1, 2))}
+    # A chord with a SINGLE within a 16th on either side demotes to its
+    # root. Bisected on Clocks (2026-09-03): the playability fix c5ce11b
+    # (a subset transition is a finger lift, not a re-shape) was right
+    # for chord stabs but let chord-single-chord flicker at 16th spacing
+    # survive - 3 -> 23 flickers, 0% -> 6% of positions - which the
+    # player called "notes right beside chords that felt random and hard
+    # to hit". Humans do not write it: across 335 chord-heavy library
+    # charts the median share of singles within a 16th of a chord is
+    # 0.2% (p90 5.5%) and chord-single-chord flickers median 0 per 1000
+    # positions (p90 3.6). The chord goes, not the single: Basic Pitch
+    # hears an arpeggio as on-beat chords with 16th singles between, and
+    # a charter writes the arpeggio as the single-note run it is.
+    ordered = sorted(groups)
+    beside = resolution // 4
+    single_ticks = {t for t in ordered
+                    if sum(1 for n in groups[t] if n[1] != OPEN) <= 1}
+    flicker_chords = set()
+    for i, t in enumerate(ordered):
+        if t in single_ticks:
+            continue
+        if ((i > 0 and ordered[i - 1] in single_ticks and t - ordered[i - 1] <= beside)
+                or (i + 1 < len(ordered) and ordered[i + 1] in single_ticks
+                    and ordered[i + 1] - t <= beside)):
+            flicker_chords.add(t)
+
     out: list[Note] = []
     prev_tick, prev_shape = None, None
-    for tick in sorted(groups):
+    for tick in ordered:
         group = groups[tick]
         fretted = sorted((n for n in group if n[1] != OPEN), key=lambda n: n[1])
         opens = [n for n in group if n[1] == OPEN]
         kept = fretted[:max_chord] if fretted else group[:max_chord]
         shape = tuple(n[1] for n in kept)
+
+        if len(shape) > 1 and tick in flicker_chords:
+            kept = kept[:1]
+            shape = tuple(n[1] for n in kept)
 
         if len(shape) > 1 and prev_shape is not None:
             # Style rule in BOTH eras: a different chord shape within a

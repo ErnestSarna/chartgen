@@ -1550,6 +1550,19 @@ def test_rapid_chords_demote_a_chord_beside_a_16th_single():
     for t, l, _ in out:
         lanes.setdefault(t, set()).add(l)
     assert lanes[0] == {0, 1} and lanes[res] == {0, 1}, lanes
+    # cascade: single, then three different-shape chords at 16ths - all
+    # unravel; a same-shape 16th chug after one single keeps its chords
+    arp = [(0, 2, 0), (six, 0, 0), (six, 1, 0), (2 * six, 1, 0), (2 * six, 2, 0),
+           (3 * six, 2, 0), (3 * six, 3, 0)]
+    out = reduce.simplify_rapid_chords(arp, res)
+    assert all(len({l for t2, l, _ in out if t2 == t}) == 1
+               for t in (six, 2 * six, 3 * six)), out
+    chug = [(0, 2, 0)] + [(k * six, l, 0) for k in (1, 2, 3, 4) for l in (0, 1)]
+    out = reduce.simplify_rapid_chords(chug, res)
+    kept = {t for t, l, _ in out if l == 1}
+    # (off-8th chords 48/144 fall to the no-tempo era's grid rule; the
+    # on-grid chords prove the cascade stopped at the same-shape boundary)
+    assert kept >= {2 * six, 4 * six}, out
 
 
 if __name__ == "__main__":

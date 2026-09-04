@@ -400,14 +400,32 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
     beside = resolution // 4
     single_ticks = {t for t in ordered
                     if sum(1 for n in groups[t] if n[1] != OPEN) <= 1}
+    shape_of = {t: frozenset(n[1] for n in groups[t] if n[1] != OPEN)
+                for t in ordered}
+    # A demoted chord is itself a single afterwards, so its own 16th
+    # chord neighbours must be judged against that - but only when they
+    # are a DIFFERENT shape. An arpeggio heard as varying chord pairs
+    # unravels into the single-note run it is; a same-shape 16th chug
+    # touching one stray single keeps its chords.
     flicker_chords = set()
-    for i, t in enumerate(ordered):
-        if t in single_ticks:
-            continue
-        if ((i > 0 and ordered[i - 1] in single_ticks and t - ordered[i - 1] <= beside)
-                or (i + 1 < len(ordered) and ordered[i + 1] in single_ticks
-                    and ordered[i + 1] - t <= beside)):
-            flicker_chords.add(t)
+    frontier = set(single_ticks)
+    while frontier:
+        new_frontier = set()
+        for i, t in enumerate(ordered):
+            if t in single_ticks or t in flicker_chords:
+                continue
+            for j in (i - 1, i + 1):
+                if not 0 <= j < len(ordered) or ordered[j] not in frontier:
+                    continue
+                if abs(ordered[j] - t) > beside:
+                    continue
+                if (ordered[j] in flicker_chords
+                        and shape_of[ordered[j]] == shape_of[t]):
+                    continue  # same-shape chug: do not cascade
+                flicker_chords.add(t)
+                new_frontier.add(t)
+                break
+        frontier = new_frontier
 
     out: list[Note] = []
     prev_tick, prev_shape = None, None
@@ -435,7 +453,14 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
             if tempo is not None:
                 available = (tempo.beat_to_time(tick / resolution)
                              - tempo.beat_to_time(prev_tick / resolution))
-                stray = tick in off_grid_chords and tick not in push_ok
+                # A same-shape hit within a 16th of the previous chord is
+                # a strum continuation, not a stray pad hit: demoting it
+                # manufactures the chord-single-chord flicker this pass
+                # exists to remove (Clocks: the last 8 flickers were all
+                # this rule's own doing inside same-shape 16th runs).
+                stray = (tick in off_grid_chords and tick not in push_ok
+                         and not (shape == prev_shape
+                                  and tick - prev_tick <= beside))
                 too_fast = rapid_change or stray or playability.cost(
                     set(prev_shape), set(shape), is_hopo=False) > available
             else:

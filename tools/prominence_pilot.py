@@ -198,9 +198,13 @@ def features(mono, sr, meter, stem_events, t0, t1):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("folders", nargs="+", type=Path)
+    ap.add_argument("folders", nargs="*", type=Path)
     ap.add_argument("-o", "--out", type=Path, required=True)
+    ap.add_argument("--list", type=Path, help="UTF-8 file of folder paths, one per line")
     args = ap.parse_args(argv)
+    if args.list:
+        args.folders += [Path(line.strip()) for line in
+                         args.list.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     import pyloudnorm as pyln
     import soundfile as sf

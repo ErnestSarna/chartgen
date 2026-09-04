@@ -77,6 +77,14 @@ SOFT_MAX_CENTROID_HZ = 2500.0
 KEYS_TAP_SHARE = 0.09      # keyed score at/above: section taps whole
 KEYS_NO_TAP_SHARE = -0.09  # keyed score at/below: guitar/band, no taps
 TRUE_STEMS = ("drums", "bass", "vocals", "guitar", "piano", "sw_other")
+# Inside a keyed section, chords stay strummed. Library-wide (800 charts):
+# 11.9% of human-tapped positions are chords vs 28.5% of untapped ones,
+# and per tap-song the median chord share among tapped notes is 1.7%
+# (51% of tap songs tap <=2% chords). Faded's human chart taps 400 notes
+# with ZERO chords while its 274 untapped notes are 32% chords - the
+# synth-chord drops are strummed, the lead runs tapped. Sustains show no
+# such split (9.3% vs 11.4%), so they tap with their section.
+TAP_CHORDS_IN_KEYED_SECTIONS = False
 
 
 def _samples(feature, times, when):
@@ -199,6 +207,19 @@ def foreground_by_span(spans_s, mono, sr, centroid=None, cen_times=None):
     return out
 
 
+def section_tap_ticks(inside, tap_chords: bool = None):
+    """Ticks a whole-section tap marks: every position, or only the
+    single-note ones when chords are to stay strummed."""
+    tap_chords = (TAP_CHORDS_IN_KEYED_SECTIONS if tap_chords is None
+                  else tap_chords)
+    lanes: dict[int, set] = {}
+    for t, lane, _ in inside:
+        lanes.setdefault(t, set()).add(lane)
+    if tap_chords:
+        return set(lanes)
+    return {t for t, ls in lanes.items() if len(ls - {7}) <= 1}
+
+
 def keys_by_span(spans_s, mono, sr):
     """Keyed foreground score per (t0, t1) span, or None without the six
     true SW stems: share(piano) + share(synth residual) - share(guitar),
@@ -287,7 +308,7 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
             if not inside:
                 continue
             if score >= KEYS_TAP_SHARE:
-                chosen.update(t for t, _, _ in inside)
+                chosen.update(section_tap_ticks(inside))
                 soft_sections += 1
             elif score > KEYS_NO_TAP_SHARE:
                 mixed_notes.extend(inside)

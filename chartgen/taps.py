@@ -75,7 +75,7 @@ SOFT_MAX_CENTROID_HZ = 2500.0
 # tap; the middle band taps 33% of the time and falls through to the
 # phrase logic. Centroid gates added nothing and are not used here.
 KEYS_TAP_SHARE = 0.09      # keyed score at/above: section taps whole
-KEYS_NO_TAP_SHARE = -0.09  # keyed score at/below: guitar/band, no taps
+KEYS_NO_TAP_SHARE = -0.09  # (v4 no longer uses a middle band; kept for the sweep)
 TRUE_STEMS = ("drums", "bass", "vocals", "guitar", "piano", "sw_other")
 # A keyed section taps WHOLE, chords included. The library statistic that
 # argued otherwise (11.9% of human-tapped positions are chords vs 28.5%
@@ -256,9 +256,8 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
 
     Two-level decision. Sections classify by their FOREGROUND. With the
     six true SW stems (v4): a keys/synth-led section (piano + synth share
-    minus guitar share >= KEYS_TAP_SHARE) taps whole, a guitar/band-led
-    one (<= KEYS_NO_TAP_SHARE) not at all, the middle falls through to
-    the phrase logic on de-drummed audio. With only the four Demucs-style
+    minus guitar share >= KEYS_TAP_SHARE) taps whole, every other section
+    not at all - never a mix inside one section. With only the four Demucs-style
     stems (v3): the melodic stem's dominance plus a centroid guard decide
     the same three ways. Without stems or sections the old full-mix
     behaviour stands.
@@ -308,11 +307,13 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
             inside = [n for n in notes if a <= n[0] < b]
             if not inside:
                 continue
+            # Whole sections only: the note-level phrase fallback for the
+            # middle band was playtested on In the End (2026-09-03) and
+            # rejected - it mixed taps and strums inside guitar-forward
+            # verses. A section either taps whole or not at all.
             if score >= KEYS_TAP_SHARE:
                 chosen.update(section_tap_ticks(inside))
                 soft_sections += 1
-            elif score > KEYS_NO_TAP_SHARE:
-                mixed_notes.extend(inside)
             else:
                 band_sections += 1
     else:

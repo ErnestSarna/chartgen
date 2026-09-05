@@ -131,9 +131,40 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
         events = transcribe.transcribe(str(audio), progress)
         check()
         progress("[3/6] building Expert from transcription")
+        # The followed-instrument timeline comes first now: its per-stem
+        # transcriptions feed keyed rescue (below), chord texture and the
+        # rhythm/solo consumers further down.
+        windows = None
+        stem_events = {}
+        if getattr(opts, "prominence", True):
+            from . import prominence
+
+            try:
+                windows = prominence.timeline(str(audio), tempo, duration_s, progress,
+                                              known_events=stem_events)
+            except Exception as error:  # a prior, never worth failing a chart
+                windows = None
+                progress(f"      followed instrument skipped: {type(error).__name__}: {error}")
+            if windows:
+                share = {}
+                for w in windows:
+                    share[w["stem"]] = share.get(w["stem"], 0) + 1
+                mix = ", ".join(f"{(k or 'unsure')} {v / len(windows):.0%}"
+                                for k, v in sorted(share.items(), key=lambda kv: -kv[1]))
+                progress(f"      followed instrument: {prominence.letters(windows)} "
+                         f"({len(prominence.runs(windows))} run(s); {mix})")
+            else:
+                progress("      followed instrument: no timeline (model or SW stems unavailable)")
         if not getattr(opts, "no_bass_fallback", False):
             extra = []
-            if transcribe.starved_runs(events, tempo):
+            if windows:
+                extra, touched, counts = prominence.keyed_rescue_events(
+                    events, windows, stem_events, tempo)
+                if extra:
+                    detail = ", ".join(f"{k} {v}" for k, v in counts.items())
+                    progress(f"      keyed rescue: {len(extra)} note(s) from the followed "
+                             f"stem in {touched} starved window(s) ({detail})")
+            if not extra and not windows and transcribe.starved_runs(events, tempo):
                 # Starved stretches first get the strong medicine: transcribe
                 # the isolated stems there (separation removes the masking
                 # that collapsed the mix transcription). Demucs results are
@@ -185,7 +216,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
             after = len({t for t, _, _ in expert})
             if before > after:
                 progress(f"      density: {before} -> {after} positions")
-        gevents = None  # guitar-stem transcription, shared with triples
+        gevents = stem_events.get("guitar")  # from the timeline when it ran
         if not getattr(opts, "no_guitar_texture", False):
             from . import guitar as guitarmod
 
@@ -199,17 +230,19 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                 gshare = guitarmod.guitar_share(g)
                 if gshare >= guitarmod.MIN_GUITAR_SHARE:
                     progress(f"      guitar stem active ({gshare:.0%}); "
-                             f"transcribing it for chord texture")
-                    import soundfile as sf
-                    import tempfile as tf
+                             + ("reusing the timeline's transcription for chord texture"
+                                if gevents is not None else "transcribing it for chord texture"))
+                    if gevents is None:
+                        import soundfile as sf
+                        import tempfile as tf
 
-                    with tf.NamedTemporaryFile(suffix=".wav", delete=False) as fh:
-                        gpath = fh.name
-                    try:
-                        sf.write(gpath, g, guitarmod.SW_SR)
-                        gevents = transcribe.transcribe(gpath)
-                    finally:
-                        Path(gpath).unlink(missing_ok=True)
+                        with tf.NamedTemporaryFile(suffix=".wav", delete=False) as fh:
+                            gpath = fh.name
+                        try:
+                            sf.write(gpath, g, guitarmod.SW_SR)
+                            gevents = transcribe.transcribe(gpath)
+                        finally:
+                            Path(gpath).unlink(missing_ok=True)
                     voices = guitarmod.second_voices(gevents, tempo)
                     expert, added = guitarmod.chordify(expert, voices, res)
                     if added:
@@ -244,24 +277,11 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                              f" but no chord run met the promotion grammar")
         followed = None
         timeline_solos = None
-        if getattr(opts, "prominence", True):
+        if windows:
             from . import prominence
 
-            try:
-                windows = prominence.timeline(str(audio), tempo, duration_s, progress,
-                                              known_events={"guitar": gevents} if gevents else None)
-            except Exception as error:  # a prior, never worth failing a chart
-                windows = None
-                progress(f"      followed instrument skipped: {type(error).__name__}: {error}")
-            if windows:
+            if True:
                 followed = prominence.runs(windows)
-                share = {}
-                for w in windows:
-                    share[w["stem"]] = share.get(w["stem"], 0) + 1
-                mix = ", ".join(f"{(k or 'unsure')} {v / len(windows):.0%}"
-                                for k, v in sorted(share.items(), key=lambda kv: -kv[1]))
-                progress(f"      followed instrument: {prominence.letters(windows)} "
-                         f"({len(followed)} run(s); {mix})")
                 from . import stems as stemsmod
 
                 st = stemsmod.separate(str(audio), progress, backend="sw")
@@ -279,8 +299,6 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                                       for a, b in timeline_solos)
                     progress(f"      solos: {len(timeline_solos)} lead break(s) from the "
                              f"followed-instrument timeline" + (f" ({spans})" if spans else ""))
-            else:
-                progress("      followed instrument: no timeline (model or SW stems unavailable)")
         if not expert:
             raise ValueError(
                 "transcription found no chartable notes — is this audio "

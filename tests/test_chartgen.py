@@ -1715,6 +1715,37 @@ def test_solo_hysteresis_runs():
     assert len(vec) == 46 + 5 + 5 + 4, len(vec)
 
 
+def test_keyed_rescue_fills_a_starved_window_from_the_followed_stem():
+    """A starved piano-followed window gains the piano stem's events (not
+    the guitar's), on empty ticks only; a well-charted window and a
+    window followed on an inaudible stem stay untouched."""
+    from chartgen import prominence
+    from chartgen.tempo import TempoMap
+
+    tm = TempoMap(beat_times=np.arange(0, 60, 0.5), pickup_beats=0)  # 120 bpm: a window = 8 s
+    beat = 0.5
+    mix = [(0.0, 0.3, 60, 0.8), (4 * beat, 0.3, 62, 0.8)]            # two mix notes in window 0
+    piano = [(k * beat, 0.3, 64 + (k % 5), 0.6) for k in range(32)]  # 8ths for 16 s
+    guitar = [(k * beat + 0.25 * beat, 0.3, 50, 0.6) for k in range(32)]
+    feats = {s: {k: 0.1 for k in prominence.FEATS} for s in prominence.STEMS}
+    feats["drums_energy"] = 0.1
+    quiet = {s: {k: 0.0 for k in prominence.FEATS} for s in prominence.STEMS}
+    quiet["drums_energy"] = 0.1
+    windows = [{"t0": 0.0, "t1": 8.0, "beat0": 0, "beat1": 16, "stem": "piano", "conf": 0.9, "features": feats},
+               {"t0": 8.0, "t1": 16.0, "beat0": 16, "beat1": 32, "stem": "piano", "conf": 0.9, "features": quiet}]
+    extra, touched, counts = prominence.keyed_rescue_events(
+        mix, windows, {"piano": piano, "guitar": guitar}, tm)
+    assert touched == 1 and counts == {"piano": len(extra)}, (touched, counts)
+    assert all(s0 < 8.0 for s0, _, _, _ in extra), "the inaudible window is untouched"
+    assert all(p >= 64 for _, _, p, _ in extra), "piano events only"
+    taken = {tm.quantize(s0, subdiv=4) for s0, _, _, _ in mix}
+    assert not any(tm.quantize(s0, subdiv=4) in taken for s0, _, _, _ in extra), "empty ticks only"
+    # well charted: the mix already holds most of the stem's positions
+    full = [(k * beat, 0.3, 60, 0.8) for k in range(16)]
+    extra2, touched2, _ = prominence.keyed_rescue_events(full, windows[:1], {"piano": piano}, tm)
+    assert touched2 == 0 and not extra2
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

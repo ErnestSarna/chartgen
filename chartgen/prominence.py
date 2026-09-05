@@ -188,6 +188,10 @@ def timeline(audio_path, tempo, duration_s, progress=lambda m: None, known_event
 
     meter = pyln.Meter(stemsmod.SR)
     stem_events = transcribe_stems(mono, stemsmod.SR, progress, known_events)
+    if known_events is not None:
+        # in/out: the caller keeps every stem's transcription (the
+        # chord-texture pass reuses the guitar's; keyed rescue all five)
+        known_events.update(stem_events)
     spans = windows_for(tempo, duration_s)
     feats = [window_features(mono, stemsmod.SR, meter, stem_events, t0, t1) for t0, t1, _, _ in spans]
     rows, keep = [], []
@@ -491,3 +495,59 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
         return expert, 0, 0
     out = [(t, relaned_opens.get(t, l) if l == 7 else l, sus) for t, l, sus in expert]
     return sorted(set(out + added)), len(added), touched
+
+
+# Keyed rescue: the pitched half of section commitment, applied only where
+# the chart is empty. The shipped stem rescue fills a starved stretch from
+# the shim "other" and bass stems - a blend with no idea which instrument
+# the charter follows, which is where bass notes in a quiet guitar
+# passage (and the open-note deserts) come from. With the timeline every
+# stem is already transcribed, so a starved 4-bar window is filled from
+# the FOLLOWED stem alone, through the same admission rules (amplitude
+# and pitch floors, octave lift, empty-tick-only dedupe). Rhythm rescue
+# stays the second pass for synth/bass drops where pitch fails outright.
+KEYED_STEMS = ("guitar", "piano", "sw_other")
+KEYED_STARVED_RATIO = 0.5      # chart holds < half the stem's positions
+KEYED_MIN_STEM_PER_S = 2.0     # the stem must be playing a line, not a pad
+KEYED_MIN_SHARE = 0.10         # and be audible in the window
+
+
+def keyed_rescue_events(events, windows, stem_events, tempo,
+                        min_pitch: int = 40, min_amplitude: float = 0.20):
+    """Extra transcription events from each starved window's followed
+    stem. Returns (events_to_add, windows_touched, stem_counts)."""
+    from . import transcribe
+
+    kept: dict = {}
+    for s0, _, pch, amp in events:
+        if pch >= min_pitch and amp >= min_amplitude:
+            kept.setdefault(tempo.quantize(s0, subdiv=4), True)
+    known = list(events)
+    added = []
+    touched = 0
+    counts = {}
+    for w in windows:
+        stem = w.get("stem")
+        if stem not in KEYED_STEMS or stem not in stem_events:
+            continue
+        f = w.get("features")
+        if not f or f[stem]["energy"] < KEYED_MIN_SHARE:
+            continue
+        t0, t1 = w["t0"], w["t1"]
+        lo, hi = tempo.quantize(t0, subdiv=4), tempo.quantize(t1, subdiv=4)
+        stem_pos = {tempo.quantize(s0, subdiv=4) for s0, _, pch, amp in stem_events[stem]
+                    if t0 <= s0 < t1 and pch >= min_pitch and amp >= min_amplitude}
+        if len(stem_pos) / max(1e-6, t1 - t0) < KEYED_MIN_STEM_PER_S:
+            continue
+        present = sum(1 for tk in kept if lo <= tk < hi)
+        if present >= KEYED_STARVED_RATIO * len(stem_pos):
+            continue
+        extra = transcribe.admit_stem_events(stem_events[stem], [(t0, t1)], known, tempo,
+                                             min_pitch, min_amplitude)
+        if not extra:
+            continue
+        added += extra
+        known += extra
+        touched += 1
+        counts[stem] = counts.get(stem, 0) + len(extra)
+    return added, touched, counts

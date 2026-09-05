@@ -1565,6 +1565,32 @@ def test_rapid_chords_demote_a_chord_beside_a_16th_single():
     assert kept >= {2 * six, 4 * six}, out
 
 
+def test_prominence_windows_smoothing_and_runs():
+    """Route B runtime pieces: 4-bar windows on the beat grid, one-window
+    blips smoothed to their neighbours, consecutive same-stem windows
+    merged into runs, and the feature vector shaped for the model."""
+    from chartgen import prominence
+    from chartgen.tempo import TempoMap
+
+    tm = TempoMap(beat_times=np.arange(0, 120, 0.5), pickup_beats=0)  # 120 bpm
+    spans = prominence.windows_for(tm, 40.0)
+    assert spans[0][:2] == (0.0, 8.0) and spans[0][2:] == (0, 16), spans[0]
+    assert all(b1 - b0 == 16 for _, _, b0, b1 in spans[:-1])
+    assert spans[-1][1] == 40.0
+    assert prominence.smooth(["guitar", "sw_other", "guitar", "piano", "piano"]) == \
+        ["guitar", "guitar", "guitar", "piano", "piano"]
+    wins = [{"t0": i * 8.0, "t1": (i + 1) * 8.0, "beat0": i * 16, "beat1": (i + 1) * 16,
+             "stem": st, "conf": 0.9} for i, st in enumerate(["guitar", "guitar", None, "piano"])]
+    rs = prominence.runs(wins)
+    assert [r["stem"] for r in rs] == ["guitar", None, "piano"]
+    assert rs[0]["t1"] == 16.0 and rs[0]["beat1"] == 32
+    assert prominence.letters(wins) == "GG?P"
+    feats = {s: {k: 0.1 for k in prominence.FEATS} for s in prominence.STEMS}
+    feats["drums_energy"] = 0.2
+    vec = prominence.feature_vector(feats, None, feats)
+    assert len(vec) == 5 * 5 + 1 + 2 * 10, len(vec)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

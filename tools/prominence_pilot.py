@@ -38,8 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from validate_solos import find_audio  # noqa: E402
+from chartgen.prominence import STEMS, window_features as features  # noqa: E402
 
-STEMS = ("vocals", "bass", "guitar", "piano", "sw_other")
 LETTER = {"vocals": "V", "bass": "B", "guitar": "G", "piano": "P", "sw_other": "S",
           "ambiguous": "?", "none": "."}
 TOL = 0.10          # STRUM's greedy 1:1 window
@@ -163,37 +163,6 @@ def label_of(scores):
     if best[1]["f1"] >= LABEL_MIN and best[1]["f1"] - second[1]["f1"] >= LABEL_MARGIN:
         return best[0]
     return "ambiguous"
-
-
-def features(mono, sr, meter, stem_events, t0, t1):
-    a, b = int(t0 * sr), int(t1 * sr)
-    feats = {}
-    energy, loud = {}, {}
-    for name in STEMS + ("drums",):
-        seg = mono[name][a:b]
-        if len(seg) < sr // 2:
-            return None
-        energy[name] = float(np.sqrt((seg ** 2).mean()))
-        try:
-            lufs = meter.integrated_loudness(seg.astype(np.float64))
-            loud[name] = 10 ** (lufs / 10) if np.isfinite(lufs) else 0.0
-        except Exception:
-            loud[name] = 0.0
-    et, lt = sum(energy.values()), sum(loud.values())
-    for name in STEMS:
-        ev = [(s, p) for s, e, p, amp in stem_events[name] if t0 <= s < t1 and amp >= 0.20]
-        by = {}
-        for s, p in ev:
-            by.setdefault(round(s, 2), []).append(p)
-        feats[name] = {
-            "energy": energy[name] / et if et else 0.0,
-            "loudness": loud[name] / lt if lt else 0.0,
-            "density": len(by) / (t1 - t0),
-            "pitch": float(np.median([p for _, p in ev])) if ev else 0.0,
-            "mono": (sum(1 for v in by.values() if len(v) == 1) / len(by)) if by else 0.0,
-        }
-    feats["drums_energy"] = energy["drums"] / et if et else 0.0
-    return feats
 
 
 def main(argv=None):

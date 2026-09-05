@@ -26,8 +26,9 @@ from pathlib import Path
 
 import numpy as np
 
-STEMS = ("vocals", "bass", "guitar", "piano", "sw_other")
-FEATS = ("energy", "loudness", "density", "pitch", "mono")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from chartgen.prominence import FEATS, STEMS, feature_vector  # noqa: E402
+
 PRIOR = {"bass": 0.7, "vocals": 0.6, "guitar": 1.0, "piano": 1.0, "sw_other": 1.0}
 
 
@@ -48,18 +49,11 @@ def label_v2(w, min_energy=0.05, min_prec=0.15, min_score=0.25, gap=0.06):
 
 
 def vector(w, prev, nxt):
-    f = w["features"]
-    x = []
-    for s in STEMS:
-        x += [f[s][k] for k in FEATS]
-    x.append(f["drums_energy"])
-    # neighbour context: energy and loudness shares of the adjacent windows
-    for ctx in (prev, nxt):
-        if ctx and ctx.get("features"):
-            x += [ctx["features"][s][k] for s in STEMS for k in ("energy", "loudness")]
-        else:
-            x += [0.0] * (2 * len(STEMS))
-    return x
+    """The runtime feature vector (chartgen.prominence), so training and
+    inference can never drift apart."""
+    return feature_vector(w["features"],
+                          prev["features"] if prev and prev.get("features") else None,
+                          nxt["features"] if nxt and nxt.get("features") else None)
 
 
 def heuristic(w, key, thresh):
@@ -70,10 +64,17 @@ def heuristic(w, key, thresh):
     return best if f[best][key] >= thresh else None
 
 
-def main(path):
+def main(argv=None):
+    import argparse
+
     from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.model_selection import GroupKFold
 
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("dump", type=Path)
+    ap.add_argument("--save", type=Path, help="fit on ALL labeled windows and joblib-dump here")
+    args = ap.parse_args(argv)
+    path = args.dump
     rows = json.loads(Path(path).read_text(encoding="utf-8"))
     X, y, groups, wins = [], [], [], []
     for gi, r in enumerate(rows):
@@ -188,8 +189,18 @@ def main(path):
     order = np.argsort(-imp.importances_mean)[:12]
     for i in order:
         print(f"  {names[i]:22s} {imp.importances_mean[i]:+.3f}")
+    if args.save:
+        import joblib
+
+        clf = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05, max_depth=6,
+                                             l2_regularization=1.0, random_state=0).fit(X, y)
+        joblib.dump({"model": clf, "stems": list(STEMS), "feats": list(FEATS), "version": 1,
+                     "songs": len(rows), "windows": int(len(y)), "held_out_accuracy": float(acc)},
+                    args.save)
+        print(f"\nsaved model ({len(y)} windows, {len(rows)} songs) -> {args.save} "
+              f"({args.save.stat().st_size // 1024} KB)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1]))
+    sys.exit(main())

@@ -1655,13 +1655,15 @@ def test_rhythm_rescue_supplies_a_starved_synth_run():
     mono = {"sw_other": np.concatenate([sig, sig]), "bass": np.concatenate([silent, silent]),
             "guitar": np.concatenate([silent, silent]), "vocals": np.concatenate([silent, silent]),
             "piano": np.concatenate([silent, silent]), "drums": np.concatenate([silent, silent])}
-    expert = [(0, 0, 0), (4 * res, 1, 0)]  # two notes in 16 s: starved
+    expert = [(0, 0, 0), (4 * res, 1, 0), (6 * res, 7, 0)]  # three notes in 16 s: starved; one open
     runs = [{"t0": 0.0, "t1": 8.0, "beat0": 0, "beat1": 16, "stem": "sw_other", "conf": 0.9},
             {"t0": 8.0, "t1": 16.0, "beat0": 16, "beat1": 32, "stem": "guitar", "conf": 0.9}]
     out, added, touched = prominence.rhythm_rescue(expert, runs, mono, sr, tm)
     assert touched == 1 and added >= 20, (added, touched)
     new = [n for n in out if n not in expert]
     assert all(0 <= l <= 4 and s == 0 for _, l, s in new)
+    assert not any(l == 7 for _, l, _ in out), "the pre-existing open is re-laned from the contour"
+    assert any(t == 6 * res for t, _, _ in out), "and kept at its tick"
     assert all(tk % (res // 4) == 0 for tk, _, _ in new), "16th grid"
     assert all(tk < 16 * res for tk, _, _ in new), "guitar run untouched"
     assert len({l for _, l, _ in new}) >= 3, "brightness sweep lanes the run"

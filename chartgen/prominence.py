@@ -292,7 +292,9 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
 
     res = tempo.resolution
     by_tick = {t for t, _, _ in expert}
+    open_ticks = sorted({t for t, l, _ in expert if l == 7})
     added = []
+    relaned_opens = {}
     touched = 0
     # Onsets are picked on the WHOLE stem once: peak-picking normalises
     # within the signal it is given, so a run segment of a near-silent
@@ -325,6 +327,7 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
         step = BARS_PER_WINDOW * 4 * res
         keep = []
         seen = set()
+        fired = []
         for lo in range(int(r["beat0"] * res), int(r["beat1"] * res), step):
             hi = min(lo + step, int(r["beat1"] * res))
             idx = [i for i, tk in enumerate(ticks) if lo <= tk < hi]
@@ -341,6 +344,7 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
             present = sum(1 for t in by_tick if lo <= t < hi)
             if present >= RESCUE_STARVED_RATIO * len(idx):
                 continue
+            fired.append((lo, hi))
             for i in idx:
                 tk = ticks[i]
                 if tk in seen:
@@ -351,11 +355,26 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
                 keep.append(i)
         if not keep:
             continue
-        lanes = _lanes_from_contour(_centroids(sig, sr, times[keep]), strengths[keep])
-        for i, lane in zip(keep, lanes):
+        # The mix transcription's own notes in a fired window are the
+        # wub heard as a sub-register pitch, charted as opens; they were
+        # fretted before only because brightness relaning fired on the
+        # sparse, stuck stretch. Lane them from the same contour as the
+        # rescued notes (humans chart 0-5% opens on these songs).
+        opens_here = [t for t in open_ticks if any(lo <= t < hi for lo, hi in fired)
+                      and t not in relaned_opens]
+        open_times = np.array([tempo.beat_to_time(t / res) for t in opens_here])
+        all_times = np.concatenate([times[keep], open_times]) if len(open_times) else times[keep]
+        fill = float(np.median(strengths[keep])) if len(keep) else 0.0
+        all_str = np.concatenate([strengths[keep], np.full(len(open_times), fill)]) \
+            if len(open_times) else strengths[keep]
+        lanes = _lanes_from_contour(_centroids(sig, sr, all_times), all_str)
+        for i, lane in zip(keep, lanes[:len(keep)]):
             added.append((ticks[i], lane, 0))
             by_tick.add(ticks[i])
+        for t, lane in zip(opens_here, lanes[len(keep):]):
+            relaned_opens[t] = lane
         touched += 1
-    if not added:
+    if not added and not relaned_opens:
         return expert, 0, 0
-    return sorted(set(expert + added)), len(added), touched
+    out = [(t, relaned_opens.get(t, l) if l == 7 else l, sus) for t, l, sus in expert]
+    return sorted(set(out + added)), len(added), touched

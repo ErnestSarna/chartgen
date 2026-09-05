@@ -226,9 +226,122 @@ def timeline(audio_path, tempo, duration_s, progress=lambda m: None, known_event
         labels.append(stem)
         out.append({"t0": t0, "t1": t1, "beat0": b0, "beat1": b1, "stem": stem, "conf": conf,
                     "probs": {s: float(proba[j][n]) for n, s in enumerate(STEMS)}})
-    for w, lab in zip(out, smooth(labels)):
+    for w, lab, j in zip(out, smooth(labels), range(len(out))):
         w["stem"] = lab
+        w["features"] = feats[keep[j]]
     return out
+
+
+# Solos from the timeline. The shipped guitar-stem rule (82% precision,
+# 6% recall, ~2 quiet fires per 100 solo-less songs) loses its solos to
+# section width: chroma sections merge a solo with its neighbours (38%
+# of misses) and then trip the singing gate on the sung bars they
+# swallowed (38%). The 4-bar windows carry the same signals at solo
+# granularity - guitar density, energy, register, monophony, vocal
+# share, followed-stem probabilities - and a song-fold model on them,
+# turned into hysteresis runs, measured 86% precision / 18% recall /
+# 2.1% quiet fires on the 299-song dump (tools/solo_windows.py), three
+# times the shipped recall at higher precision. Boundaries land within
+# a window or so (median ~10 s), against the old section-wide markers.
+SOLO_MODEL_PATH = Path(__file__).resolve().parent / "solo_model.joblib"
+SOLO_ENTER = 0.70        # a run needs SOLO_MIN_WINDOWS windows at/above this
+SOLO_EXTEND = 0.40       # then grows over neighbours at/above this
+SOLO_MIN_WINDOWS = 4     # 16 bars: the shipped rule's 32-beat floor, doubled
+SOLO_BRIDGE = 0          # windows below EXTEND a run may jump (0 = none)
+_SOLO_MODEL = None
+
+
+def solo_vector(feats, probs, i, end_s):
+    """Window i's solo features: the followed-instrument vector, the
+    stem probabilities, guitar statistics relative to the song, position,
+    window length and the guitar density of the four neighbours. `feats`
+    is the per-window feature list (None where absent), `probs` an
+    (n, len(STEMS)) array. Shared by tools/solo_windows.py (training)
+    and solo_runs (inference)."""
+    f = feats[i]
+    gd = [x["guitar"]["density"] for x in feats if x]
+    ge = [x["guitar"]["energy"] for x in feats if x]
+    gp = [x["guitar"]["pitch"] for x in feats if x and x["guitar"]["pitch"] > 0]
+    md = float(np.median(gd)) if gd else 0.0
+    me = float(np.median(ge)) if ge else 0.0
+    mp = float(np.median(gp)) if gp else 0.0
+    vec = feature_vector(f, feats[i - 1] if i > 0 else None,
+                         feats[i + 1] if i + 1 < len(feats) else None)
+    ctx = [feats[j]["guitar"]["density"] if 0 <= j < len(feats) and feats[j] else 0.0
+           for j in (i - 2, i - 1, i + 1, i + 2)]
+    t0, t1 = feats[i]["_t0"], feats[i]["_t1"]
+    return (vec + list(probs[i])
+            + [f["guitar"]["density"] / (md + 1e-6), f["guitar"]["energy"] / (me + 1e-6),
+               (f["guitar"]["pitch"] - mp) if f["guitar"]["pitch"] > 0 else 0.0,
+               t0 / max(1.0, end_s), t1 - t0] + ctx)
+
+
+def load_solo_model():
+    global _SOLO_MODEL
+    if _SOLO_MODEL is None and SOLO_MODEL_PATH.is_file():
+        import joblib
+
+        _SOLO_MODEL = joblib.load(SOLO_MODEL_PATH)
+    return _SOLO_MODEL
+
+
+def solo_hysteresis(probs, enter=SOLO_ENTER, extend=SOLO_EXTEND,
+                    min_windows=SOLO_MIN_WINDOWS, bridge=SOLO_BRIDGE):
+    """[(i0, i1)] inclusive window index runs."""
+    n = len(probs)
+    core = [p >= enter for p in probs]
+    soft = [p >= extend for p in probs]
+    runs, i = [], 0
+    while i < n:
+        if not core[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and core[j + 1]:
+            j += 1
+        if j - i + 1 < min_windows:
+            i = j + 1
+            continue
+        a, b = i, j
+        while a - 1 >= 0 and soft[a - 1]:
+            a -= 1
+        while b + 1 < n and soft[b + 1]:
+            b += 1
+        k = b + 1
+        while k < n and not soft[k] and k - b <= bridge:
+            k += 1
+        if k < n and soft[k] and k - b <= bridge + 1 and k > b + 1:
+            b = k
+            while b + 1 < n and soft[b + 1]:
+                b += 1
+        runs.append((a, b))
+        i = b + 1
+    return runs
+
+
+def solo_runs(windows, model, tempo):
+    """[(start_tick, end_tick)] lead breaks from a timeline (windows with
+    features and probs, as timeline() returns them)."""
+    if not windows or model is None:
+        return []
+    feats = []
+    for w in windows:
+        f = dict(w["features"]) if w.get("features") else None
+        if f is not None:
+            f["_t0"], f["_t1"] = w["t0"], w["t1"]
+        feats.append(f)
+    probs = np.array([[w["probs"][s] for s in STEMS] for w in windows])
+    end_s = windows[-1]["t1"]
+    idx = [i for i, f in enumerate(feats) if f is not None]
+    if not idx:
+        return []
+    X = np.array([solo_vector(feats, probs, i, end_s) for i in idx])
+    p = model["model"].predict_proba(X)[:, 1]
+    per_window = np.zeros(len(windows))
+    per_window[idx] = p
+    res = tempo.resolution
+    return [(int(windows[a]["beat0"] * res), int(windows[b]["beat1"] * res))
+            for a, b in solo_hysteresis(list(per_window))]
 
 
 # Rhythm rescue. In EDM drops the followed stem is synth or bass but its

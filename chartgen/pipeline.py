@@ -243,6 +243,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                     progress(f"      triple song (evidence {ev['share']:.0%})"
                              f" but no chord run met the promotion grammar")
         followed = None
+        timeline_solos = None
         if getattr(opts, "prominence", False):
             from . import prominence
 
@@ -271,6 +272,13 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                         progress(f"      rhythm rescue: {added} note(s) from synth/bass "
                                  f"onsets in {touched} starved run(s) (Basic Pitch hears "
                                  f"9-12% of a drop's notes; stem onsets 45-82%)")
+                solo_model = prominence.load_solo_model()
+                if solo_model is not None:
+                    timeline_solos = prominence.solo_runs(windows, solo_model, tempo)
+                    spans = ", ".join(f"{tempo.beat_to_time(a / res):.0f}-{tempo.beat_to_time(b / res):.0f}s"
+                                      for a, b in timeline_solos)
+                    progress(f"      solos: {len(timeline_solos)} lead break(s) from the "
+                             f"followed-instrument timeline" + (f" ({spans})" if spans else ""))
             else:
                 progress("      followed instrument: no timeline (model or SW stems unavailable)")
         if not expert:
@@ -285,7 +293,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                      f"deterministic; retries would not change it)")
         return _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
                              engine, audio, duration_s, bp_events=events,
-                             followed=followed)
+                             followed=followed, timeline_solos=timeline_solos)
 
     progress(f"[2/6] loading {opts.model}")
     from .model import PitchCharter, load_charter
@@ -393,7 +401,8 @@ def _group(notes):
 
 
 def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
-                  engine, audio, duration_s, bp_events=None, followed=None) -> dict:
+                  engine, audio, duration_s, bp_events=None, followed=None,
+                  timeline_solos=None) -> dict:
     """Everything downstream of Expert-note production, shared by engines:
     difficulty target, reduction, expression, lyrics, art, rating, writing."""
     res = tempo.resolution
@@ -678,7 +687,11 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             progress(f"      {made} sustain ladder(s): a held note rings "
                      f"while higher lanes join (39% of human charts)")
     solo_phrases = ()
-    if not getattr(opts, "no_solos", False):
+    if timeline_solos is not None and not getattr(opts, "no_solos", False):
+        # The timeline detector (86%p/18%r/2.1% quiet on the 299-song dump)
+        # replaces the section-based rule whenever a timeline exists.
+        solo_phrases = list(timeline_solos)
+    elif not getattr(opts, "no_solos", False):
         from . import solo as solomod
 
         solo_phrases = solomod.detect(expert, list(events), list(lyric_events),

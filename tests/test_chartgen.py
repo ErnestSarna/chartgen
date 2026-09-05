@@ -1695,6 +1695,26 @@ def test_star_power_prefers_typical_bars_over_the_densest():
     assert all(not (start <= 10 * bar < start + length) for start, length in phrases), phrases
 
 
+def test_solo_hysteresis_runs():
+    """A run needs SOLO_MIN_WINDOWS core windows, grows over soft
+    neighbours, and ignores short cores; the solo vector has the
+    followed-instrument vector, probabilities, song-relative stats,
+    position, length and four neighbours' guitar density."""
+    from chartgen import prominence
+    probs = [0.1, 0.5, 0.9, 0.9, 0.9, 0.9, 0.5, 0.1, 0.9, 0.9, 0.1, 0.2]
+    assert prominence.solo_hysteresis(probs, 0.7, 0.4, 4, 0) == [(1, 6)]
+    assert prominence.solo_hysteresis(probs, 0.7, 0.4, 2, 0) == [(1, 6), (8, 9)]
+    assert prominence.solo_hysteresis([0.9] * 3, 0.7, 0.4, 4, 0) == []
+    feats = []
+    for i in range(3):
+        f = {s: {k: 0.1 for k in prominence.FEATS} for s in prominence.STEMS}
+        f["drums_energy"] = 0.2
+        f["_t0"], f["_t1"] = i * 8.0, (i + 1) * 8.0
+        feats.append(f)
+    vec = prominence.solo_vector(feats, np.full((3, 5), 0.2), 1, 24.0)
+    assert len(vec) == 46 + 5 + 5 + 4, len(vec)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

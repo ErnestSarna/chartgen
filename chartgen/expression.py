@@ -119,7 +119,13 @@ def star_power_phrases(
     Nothing is placed in the last 8 measures (human p10 is ~7): Clone Hero
     needs half a meter (two phrases) to activate at all, so late star power
     is meter the player can never spend. Within those rules phrases go on
-    the densest bars, spaced out so activations spread across the song.
+    bars of the song's TYPICAL density, spaced out so activations spread
+    across the song. They used to go on the densest bars: measured against
+    the library (2026-09-05) human phrases sit at 1.04x the song's density
+    and hold a median 12 notes, ours sat at 1.0-1.5x with 16-23 notes, and
+    a 20-note phrase completes about 12% of the time at 90% accuracy where
+    a 12-note one completes 28% - the player banked half the meter and
+    "couldn't fill a bar". Same count, spacing and length; ordinary bars.
     """
     bar = beats_per_bar * resolution
     ticks = sorted(t for t, _, _ in notes)
@@ -139,8 +145,10 @@ def star_power_phrases(
     played_beats = (ticks[-1] - ticks[0]) / resolution
     target = max(2, int(played_beats / beats_per_phrase))
     chosen: list[tuple[int, int]] = []
-    # Densest first; tie-break on position so the result is deterministic.
-    for _, start in sorted(candidates, key=lambda c: (-c[0], c[1])):
+    # Closest to the song's typical phrase count first; tie-break on
+    # position so the result is deterministic.
+    typical = sorted(c[0] for c in candidates)[len(candidates) // 2] if candidates else 0
+    for _, start in sorted(candidates, key=lambda c: (abs(c[0] - typical), c[1])):
         if all(abs(start - s) >= min_gap_bars * bar for s, _ in chosen):
             chosen.append((start, length))
             if len(chosen) >= target:

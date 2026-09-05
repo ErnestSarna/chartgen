@@ -257,7 +257,16 @@ def keys_by_span(spans_s, mono, sr):
 # Sexualizer case - a 20 s guitar passage inside a synth song, which one
 # 57 s chroma section averaged into "tap it all" - gets its own run.
 TAP_STEMS = ("piano", "sw_other")
-STRUM_STEMS = ("guitar", "bass", "vocals")
+STRUM_STEMS = ("guitar", "vocals")
+# Bass is NEUTRAL: a bass-followed run adopts the decision of the runs
+# around it and never flips taps on its own. Playtest (Sexualizer,
+# 2026-09-05): two-window bass runs inside a synth song strummed, "strums
+# mixed into a mostly-taps section that didn't have much audio change" -
+# the bass taking over is real but is not an instrument change a player
+# hears, unlike In the End's piano-to-guitar switches, which are and
+# stay. In the 299-song dump 14% of bass runs are short and sandwiched
+# in synth. Bass decides for itself (strum) only where it is the song's
+# main followed stem.
 
 
 def detect(notes, y, sr, tempo, progress=lambda m: None,
@@ -322,19 +331,46 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
         # the followed-instrument run's stem when a timeline is given.
         rule = "followed-instrument" if stems_of else "keys/synth"
         fallback = 0
+        decisions = []
+        for i, ((a, b), score) in enumerate(zip(spans, keyed)):
+            stem = stems_of[i] if stems_of else None
+            if stem in TAP_STEMS:
+                decisions.append(True)
+            elif stem in STRUM_STEMS:
+                decisions.append(False)
+            elif stem == "bass":
+                decisions.append(None)  # resolved from the neighbours below
+            else:
+                decisions.append(score >= KEYS_TAP_SHARE)
+                fallback += bool(stems_of)
+        if stems_of:
+            weights = [b - a for a, b in spans]
+            bass_main = (sum(w for w, st in zip(weights, stems_of) if st == "bass")
+                         > 0.5 * sum(weights))
+            for i, d in enumerate(decisions):
+                if d is not None:
+                    continue
+                if bass_main:
+                    decisions[i] = False
+                    continue
+                prev = next((decisions[j] for j in range(i - 1, -1, -1) if decisions[j] is not None), None)
+                nxt = next((decisions[j] for j in range(i + 1, len(decisions)) if decisions[j] is not None), None)
+                if prev is None and nxt is None:
+                    decisions[i] = False
+                elif prev is None or nxt is None:
+                    decisions[i] = prev if nxt is None else nxt
+                elif prev == nxt:
+                    decisions[i] = prev
+                else:
+                    # neighbours disagree: follow the longer one
+                    lp = next(weights[j] for j in range(i - 1, -1, -1) if decisions[j] is not None)
+                    ln = next(weights[j] for j in range(i + 1, len(decisions)) if decisions[j] is not None)
+                    decisions[i] = prev if lp >= ln else nxt
         for i, ((a, b), score) in enumerate(zip(spans, keyed)):
             inside = [n for n in notes if a <= n[0] < b]
             if not inside:
                 continue
-            stem = stems_of[i] if stems_of else None
-            if stem in TAP_STEMS:
-                tap = True
-            elif stem in STRUM_STEMS:
-                tap = False
-            else:
-                # no run, or a run with no opinion: the keyed-share rule
-                tap = score >= KEYS_TAP_SHARE
-                fallback += bool(stems_of)
+            tap = decisions[i]
             # Whole sections only: the note-level phrase fallback for the
             # middle band was playtested on In the End (2026-09-03) and
             # rejected - it mixed taps and strums inside guitar-forward

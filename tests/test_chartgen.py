@@ -1614,6 +1614,10 @@ def test_taps_follow_the_instrument_runs():
     runs = [{"t0": 0.0, "t1": 8.0, "beat0": 0, "beat1": 16, "stem": "sw_other", "conf": 0.9},
             {"t0": 8.0, "t1": 16.0, "beat0": 16, "beat1": 32, "stem": "guitar", "conf": 0.9},
             {"t0": 16.0, "t1": 24.0, "beat0": 32, "beat1": 48, "stem": None, "conf": 0.4}]
+    # bass is neutral: a bass run between two synth runs taps with them
+    bass_runs = [{"t0": 0.0, "t1": 8.0, "beat0": 0, "beat1": 16, "stem": "sw_other", "conf": 0.9},
+                 {"t0": 8.0, "t1": 16.0, "beat0": 16, "beat1": 32, "stem": "bass", "conf": 0.9},
+                 {"t0": 16.0, "t1": 24.0, "beat0": 32, "beat1": 48, "stem": "sw_other", "conf": 0.9}]
     from chartgen import stems as stemsmod
     stemsmod._CACHE.clear()
     stemsmod._CACHE["fake"] = mono
@@ -1622,6 +1626,8 @@ def test_taps_follow_the_instrument_runs():
     try:
         chosen = taps.detect(notes, np.zeros(sr), sr, tm, audio_path="fake",
                              section_marks=[(0, "a")], followed=runs)
+        chosen_bass = taps.detect(notes, np.zeros(sr), sr, tm, audio_path="fake",
+                                  section_marks=[(0, "a")], followed=bass_runs)
     finally:
         stemsmod.separate = real
         stemsmod._CACHE.clear()
@@ -1631,6 +1637,7 @@ def test_taps_follow_the_instrument_runs():
     assert first <= chosen, "synth run taps whole"
     assert not (second & chosen), "guitar run stays strummed even on synth-led audio"
     assert third <= chosen, "no-opinion run falls back to the keyed rule (synth-led -> tap)"
+    assert second <= chosen_bass, "a bass run between synth runs adopts their taps"
 
 
 def test_rhythm_rescue_supplies_a_starved_synth_run():
@@ -1671,6 +1678,21 @@ def test_rhythm_rescue_supplies_a_starved_synth_run():
     full = [(k * res // 2, 2, 0) for k in range(32)]
     out2, added2, _ = prominence.rhythm_rescue(full, runs[:1], mono, sr, tm)
     assert added2 == 0 and out2 == full
+
+
+def test_star_power_prefers_typical_bars_over_the_densest():
+    """Human phrases sit at the song's typical density (1.04x, 12 notes);
+    ours went on the densest bars (16-23 notes) and the player banked
+    half the meter. With one 2-bar burst of 16ths in an 8th-note song,
+    no phrase lands on the burst."""
+    res = RESOLUTION
+    bar = 4 * res
+    notes = [(i * (res // 2), i % 5, 0) for i in range(40 * 8)]          # 8ths, 40 bars
+    burst = [(10 * bar + k * (res // 4), k % 5, 0) for k in range(32)]   # bars 10-11 in 16ths
+    notes = sorted(set(notes + burst))
+    phrases = star_power_phrases(notes, res, duration_s=120.0)
+    assert phrases, phrases
+    assert all(not (start <= 10 * bar < start + length) for start, length in phrases), phrases
 
 
 if __name__ == "__main__":

@@ -687,16 +687,31 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             progress(f"      {made} sustain ladder(s): a held note rings "
                      f"while higher lanes join (39% of human charts)")
     solo_phrases = ()
-    if timeline_solos is not None and not getattr(opts, "no_solos", False):
-        # The timeline detector (86%p/18%r/2.1% quiet on the 299-song dump)
-        # replaces the section-based rule whenever a timeline exists.
-        solo_phrases = list(timeline_solos)
-    elif not getattr(opts, "no_solos", False):
+    if not getattr(opts, "no_solos", False):
         from . import solo as solomod
 
         solo_phrases = solomod.detect(expert, list(events), list(lyric_events),
                                       y, sr, tempo, progress,
                                       audio_path=str(audio))
+        if timeline_solos:
+            # UNION with the timeline detector (86%p/18%r/2.1% quiet on the
+            # 299-song dump): the two miss different solos - the section
+            # rule caught Mary Jane's outro, the window model did not, and
+            # the window model caught both of Sexualizer's within 4 s -
+            # and each spends about a 2% false-fire budget. Overlapping
+            # spans merge into one marker.
+            merged = sorted(list(solo_phrases) + list(timeline_solos))
+            out = []
+            for a, b in merged:
+                if out and a <= out[-1][1]:
+                    out[-1] = (out[-1][0], max(out[-1][1], b))
+                else:
+                    out.append((a, b))
+            added = len(out) - len(solo_phrases)
+            solo_phrases = out
+            if added > 0:
+                progress(f"      solos: {added} added by the followed-instrument "
+                         f"timeline, {len(out)} total")
     forced_ticks: set[int] = set()
     if opts.hopos and not getattr(opts, "no_motifs", False):
         from . import motifs

@@ -398,7 +398,7 @@ class App:
         self.sections = tk.BooleanVar(value=saved.get("sections", True))
         self.hopos = tk.BooleanVar(value=saved.get("hopos", True))
         self.lyrics = tk.BooleanVar(value=saved.get("lyrics", True))
-        self.taps = tk.BooleanVar(value=saved.get("taps", False))
+        self.taps = tk.BooleanVar(value=saved.get("taps", True))
         self.solos = tk.BooleanVar(value=saved.get("solos", True))
         self.opens = tk.BooleanVar(value=saved.get("opens", True))
         # One row of eight fits only with tight spacing: the labels

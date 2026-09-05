@@ -244,7 +244,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                              f" but no chord run met the promotion grammar")
         followed = None
         timeline_solos = None
-        if getattr(opts, "prominence", False):
+        if getattr(opts, "prominence", True):
             from . import prominence
 
             try:
@@ -658,7 +658,7 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         except Exception as error:  # lyrics are a nice-to-have, never fatal
             progress(f"      lyrics skipped: {type(error).__name__}: {error}")
     tap_ticks = set()
-    if getattr(opts, "taps", False):
+    if getattr(opts, "taps", True):
         from . import taps as tapsmod
 
         tap_ticks = tapsmod.detect(expert, y, sr, tempo, progress,

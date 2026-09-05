@@ -1,4 +1,4 @@
-"""Mark soft passages as tap notes. Experimental, off by default.
+"""Mark keys/synth-led sections as tap notes. On by default since 2026-09-05.
 
 No charting standard documents when to tap (YARG: "use them sensibly", and
 nothing else anywhere), and measurement settled that the community has no
@@ -9,8 +9,8 @@ implements a chosen philosophy rather than a mimicked one: taps mark SOFT
 sounds - the piano lines, plucks and gentle synth runs where a strum is
 the wrong physical gesture.
 
-Because it is a philosophy and not a measured consensus, the feature ships
-off by default; the constants are still swept against the human tap
+The section rule is the measured part (v4 instrument keying, then the
+followed-instrument timeline); the constants below are still swept against the human tap
 positions (tools/sweep_taps.py) so "soft" means something calibrated
 rather than guessed.
 

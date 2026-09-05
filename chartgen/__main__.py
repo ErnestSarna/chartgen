@@ -111,14 +111,13 @@ def build_args(argv):
                          "notes clearly below the melody - bass drops, "
                          "chugs, pedal tones. 60%% of human charts use "
                          "them; default on")
-    ap.add_argument("--taps", action=argparse.BooleanOptionalAction, default=False,
-                    help="EXPERIMENTAL: mark soft phrases (piano lines, "
-                         "plucks, gentle synth runs) as tap notes, which "
-                         "play without strumming. Off by default: no "
-                         "charting standard defines tap usage, and measured "
-                         "against human charts the community itself only "
-                         "half-agrees (taps lean darker-timbred 2:1, but "
-                         "attack softness is a coin flip)")
+    ap.add_argument("--taps", action=argparse.BooleanOptionalAction, default=True,
+                    help="mark keys/synth-led sections as tap notes, which "
+                         "play without strumming (on by default since the "
+                         "2026-09 playtests; sections come from the "
+                         "followed-instrument timeline when it is on, else "
+                         "from the six-stem keyed-share rule; --no-taps to "
+                         "strum everything)")
     ap.add_argument("--no-solos", action="store_true",
                     help="skip solo markers (detected as busy instrumental "
                          "breaks in songs that otherwise have vocals)")
@@ -152,11 +151,11 @@ def build_args(argv):
                          "single notes the guitar's second voice on strummed "
                          "chord songs (runs only when the chart is already "
                          "chord-textured and a real guitar is present)")
-    ap.add_argument("--prominence", action=argparse.BooleanOptionalAction, default=False,
+    ap.add_argument("--prominence", action=argparse.BooleanOptionalAction, default=True,
                     help="compute the followed-instrument timeline (which stem a "
                          "charter would follow, per 4 bars, from the SW stems and a "
                          "model trained on 299 human charts) and let taps decide "
-                         "sections from it; costs four extra stem transcriptions")
+                         "sections from it; costs four extra stem transcriptions; on by default, --no-prominence to skip)")
     ap.add_argument("--no-triple-riffs", action="store_true",
                     help="never voice chord runs as three-note chords; by "
                          "default a song whose transcription shows recurring "

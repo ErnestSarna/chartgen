@@ -1629,6 +1629,43 @@ def test_taps_follow_the_instrument_runs():
     assert third <= chosen, "no-opinion run falls back to the keyed rule (synth-led -> tap)"
 
 
+def test_rhythm_rescue_supplies_a_starved_synth_run():
+    """A synth-followed run whose chart is nearly empty gains notes at the
+    stem's onsets (16th-quantized, laned 0-4, none on top of existing
+    notes); a guitar-followed run and a well-charted run are untouched."""
+    from chartgen import prominence
+    from chartgen.tempo import TempoMap
+
+    sr = 44100
+    tm = TempoMap(beat_times=np.arange(0, 60, 0.5), pickup_beats=0)  # 120 bpm
+    res = tm.resolution
+    # 8 s of 8th-note clicks (4 Hz) with a slow brightness sweep
+    t = np.arange(0, 8.0, 1 / sr)
+    sig = np.zeros_like(t, dtype=np.float32)
+    for k in range(32):
+        a = int(k * 0.25 * sr)
+        n = np.arange(0, int(0.05 * sr))
+        f = 200 + 40 * k
+        sig[a:a + len(n)] = (np.sin(2 * np.pi * f * n / sr) * np.exp(-n / (0.01 * sr))).astype(np.float32)
+    silent = np.zeros(8 * sr, dtype=np.float32)
+    mono = {"sw_other": np.concatenate([sig, sig]), "bass": np.concatenate([silent, silent]),
+            "guitar": np.concatenate([silent, silent])}
+    expert = [(0, 0, 0), (4 * res, 1, 0)]  # two notes in 16 s: starved
+    runs = [{"t0": 0.0, "t1": 8.0, "beat0": 0, "beat1": 16, "stem": "sw_other", "conf": 0.9},
+            {"t0": 8.0, "t1": 16.0, "beat0": 16, "beat1": 32, "stem": "guitar", "conf": 0.9}]
+    out, added, touched = prominence.rhythm_rescue(expert, runs, mono, sr, tm)
+    assert touched == 1 and added >= 20, (added, touched)
+    new = [n for n in out if n not in expert]
+    assert all(0 <= l <= 4 and s == 0 for _, l, s in new)
+    assert all(tk % (res // 4) == 0 for tk, _, _ in new), "16th grid"
+    assert all(tk < 16 * res for tk, _, _ in new), "guitar run untouched"
+    assert len({l for _, l, _ in new}) >= 3, "brightness sweep lanes the run"
+    # a well-charted run is left alone
+    full = [(k * res // 2, 2, 0) for k in range(32)]
+    out2, added2, _ = prominence.rhythm_rescue(full, runs[:1], mono, sr, tm)
+    assert added2 == 0 and out2 == full
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

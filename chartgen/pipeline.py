@@ -242,6 +242,37 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                     # stairs no-op bug hid behind exactly this silence.
                     progress(f"      triple song (evidence {ev['share']:.0%})"
                              f" but no chord run met the promotion grammar")
+        followed = None
+        if getattr(opts, "prominence", False):
+            from . import prominence
+
+            try:
+                windows = prominence.timeline(str(audio), tempo, duration_s, progress,
+                                              known_events={"guitar": gevents} if gevents else None)
+            except Exception as error:  # a prior, never worth failing a chart
+                windows = None
+                progress(f"      followed instrument skipped: {type(error).__name__}: {error}")
+            if windows:
+                followed = prominence.runs(windows)
+                share = {}
+                for w in windows:
+                    share[w["stem"]] = share.get(w["stem"], 0) + 1
+                mix = ", ".join(f"{(k or 'unsure')} {v / len(windows):.0%}"
+                                for k, v in sorted(share.items(), key=lambda kv: -kv[1]))
+                progress(f"      followed instrument: {prominence.letters(windows)} "
+                         f"({len(followed)} run(s); {mix})")
+                from . import stems as stemsmod
+
+                st = stemsmod.separate(str(audio), progress, backend="sw")
+                if st is not None:
+                    expert, added, touched = prominence.rhythm_rescue(
+                        expert, followed, st, stemsmod.SR, tempo)
+                    if added:
+                        progress(f"      rhythm rescue: {added} note(s) from synth/bass "
+                                 f"onsets in {touched} starved run(s) (Basic Pitch hears "
+                                 f"9-12% of a drop's notes; stem onsets 45-82%)")
+            else:
+                progress("      followed instrument: no timeline (model or SW stems unavailable)")
         if not expert:
             raise ValueError(
                 "transcription found no chartable notes — is this audio "
@@ -254,7 +285,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                      f"deterministic; retries would not change it)")
         return _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
                              engine, audio, duration_s, bp_events=events,
-                             gevents=gevents)
+                             followed=followed)
 
     progress(f"[2/6] loading {opts.model}")
     from .model import PitchCharter, load_charter
@@ -362,7 +393,7 @@ def _group(notes):
 
 
 def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
-                  engine, audio, duration_s, bp_events=None, gevents=None) -> dict:
+                  engine, audio, duration_s, bp_events=None, followed=None) -> dict:
     """Everything downstream of Expert-note production, shared by engines:
     difficulty target, reduction, expression, lyrics, art, rating, writing."""
     res = tempo.resolution
@@ -617,27 +648,6 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
                 getattr(opts, "lyric_source", "auto"), progress, y, sr)
         except Exception as error:  # lyrics are a nice-to-have, never fatal
             progress(f"      lyrics skipped: {type(error).__name__}: {error}")
-    followed = None
-    if getattr(opts, "prominence", False):
-        from . import prominence
-
-        try:
-            windows = prominence.timeline(str(audio), tempo, duration_s, progress,
-                                          known_events={"guitar": gevents} if gevents else None)
-        except Exception as error:  # a prior, never worth failing a chart
-            windows = None
-            progress(f"      followed instrument skipped: {type(error).__name__}: {error}")
-        if windows:
-            followed = prominence.runs(windows)
-            share = {}
-            for w in windows:
-                share[w["stem"]] = share.get(w["stem"], 0) + 1
-            mix = ", ".join(f"{(k or 'unsure')} {v / len(windows):.0%}"
-                            for k, v in sorted(share.items(), key=lambda kv: -kv[1]))
-            progress(f"      followed instrument: {prominence.letters(windows)} "
-                     f"({len(followed)} run(s); {mix})")
-        else:
-            progress("      followed instrument: no timeline (model or SW stems unavailable)")
     tap_ticks = set()
     if getattr(opts, "taps", False):
         from . import taps as tapsmod

@@ -216,3 +216,109 @@ def timeline(audio_path, tempo, duration_s, progress=lambda m: None, known_event
     for w, lab in zip(out, smooth(labels)):
         w["stem"] = lab
     return out
+
+
+# Rhythm rescue. In EDM drops the followed stem is synth or bass but its
+# PITCHED transcription starves: the wub is a filter sweep on one note,
+# and Basic Pitch on the mix recovers 9-12% of the human onsets there
+# (Dubstep Is Dead drops, Go Beyond drop; 2026-09-05 go/no-go test),
+# while onset detection on the followed stem recovers 45-82% at 93-100%
+# precision. Charters chart the wub's RHYTHM, laned by its filter
+# contour - the same thing brightness lanes do for stuck stretches, but
+# here the notes have to be supplied first.
+RESCUE_STEMS = ("sw_other", "bass")
+RESCUE_MIN_ONSETS_PER_S = 3.0     # a real rhythm, not a pad
+RESCUE_STARVED_RATIO = 0.5        # chart holds < half the stem's onsets
+RESCUE_ONSET_DELTA = 0.07         # librosa peak-pick threshold (tested)
+RESCUE_NOTE_WINDOW_S = 0.12
+RESCUE_MIN_SPAN = 1.3             # centroid p90/p10 below this: static
+
+
+def _centroids(signal, sr, times):
+    out = []
+    for t in times:
+        a = int(t * sr)
+        seg = signal[a:min(len(signal), a + int(RESCUE_NOTE_WINDOW_S * sr))]
+        if len(seg) < 256:
+            out.append(0.0)
+            continue
+        spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+        freqs = np.fft.rfftfreq(len(seg), 1.0 / sr)
+        power = spec.sum()
+        out.append(float((spec * freqs).sum() / power) if power > 0 else 0.0)
+    return np.asarray(out)
+
+
+def _lanes_from_contour(values, strengths):
+    """Lanes 0-4 from the log-centroid contour between its p10 and p90,
+    median-filtered; a spectrally static run lanes by hit strength
+    instead (accents climb), so a monotone drop is not one lane."""
+    v = np.asarray(values, dtype=float)
+    voiced = v[v > 0]
+    if len(voiced) >= 4:
+        p10, p90 = np.percentile(voiced, 10), np.percentile(voiced, 90)
+        if p10 > 0 and p90 / p10 >= RESCUE_MIN_SPAN:
+            logc = np.log(np.maximum(v, p10 * 0.5))
+            lanes = np.clip(((logc - np.log(p10)) / (np.log(p90) - np.log(p10)) * 5).astype(int), 0, 4)
+            sm = lanes.copy()
+            for k in range(1, len(lanes) - 1):
+                sm[k] = sorted(lanes[k - 1:k + 2])[1]
+            return [int(x) for x in sm]
+    st = np.asarray(strengths, dtype=float)
+    if len(st) and st.max() > st.min():
+        ranks = (st - st.min()) / (st.max() - st.min())
+        return [int(min(4, r * 5)) for r in ranks]
+    return [1] * len(v)
+
+
+def rhythm_rescue(expert, followed, mono, sr, tempo):
+    """Add notes from the followed stem's onsets in starved synth/bass
+    runs. Returns (notes, added, runs_touched)."""
+    import librosa
+
+    res = tempo.resolution
+    by_tick = {t for t, _, _ in expert}
+    added = []
+    touched = 0
+    for r in followed:
+        if r["stem"] not in RESCUE_STEMS:
+            continue
+        t0, t1 = r["t0"], r["t1"]
+        sig = mono[r["stem"]]
+        a, b = int(t0 * sr), int(t1 * sr)
+        seg = sig[a:b]
+        if len(seg) < sr:
+            continue
+        env = librosa.onset.onset_strength(y=seg, sr=sr)
+        frames = librosa.onset.onset_detect(onset_envelope=env, sr=sr, units="frames",
+                                            delta=RESCUE_ONSET_DELTA, backtrack=False)
+        if not len(frames):
+            continue
+        times = librosa.frames_to_time(frames, sr=sr) + t0
+        strengths = env[frames]
+        if len(times) / (t1 - t0) < RESCUE_MIN_ONSETS_PER_S:
+            continue
+        lo, hi = int(r["beat0"] * res), int(r["beat1"] * res)
+        present = sum(1 for t in by_tick if lo <= t < hi)
+        if present >= RESCUE_STARVED_RATIO * len(times):
+            continue
+        ticks = [tempo.quantize(t, subdiv=4) for t in times]
+        keep = []
+        seen = set()
+        for i, tk in enumerate(ticks):
+            if tk in seen or not lo <= tk < hi:
+                continue
+            if any(abs(tk - e) <= res // 4 for e in (by_tick & {tk - res // 4, tk, tk + res // 4})):
+                continue
+            seen.add(tk)
+            keep.append(i)
+        if not keep:
+            continue
+        lanes = _lanes_from_contour(_centroids(sig, sr, times[keep]), strengths[keep])
+        for i, lane in zip(keep, lanes):
+            added.append((ticks[i], lane, 0))
+            by_tick.add(ticks[i])
+        touched += 1
+    if not added:
+        return expert, 0, 0
+    return sorted(set(expert + added)), len(added), touched

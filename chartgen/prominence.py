@@ -36,6 +36,7 @@ MODEL_PATH = Path(__file__).resolve().parent / "prominence_model.joblib"
 # as "no opinion" (taps fall back to the keyed-share rule, selection stays
 # loudness-following). 0.6 sits where held-out precision is ~96%.
 MIN_CONFIDENCE = 0.60
+MIN_AUDIBLE = 0.05
 
 _MODEL = None
 
@@ -144,7 +145,7 @@ def smooth(labels):
     for one bar."""
     out = list(labels)
     for i in range(1, len(out) - 1):
-        if out[i - 1] == out[i + 1] != out[i]:
+        if out[i - 1] is not None and out[i - 1] == out[i + 1] != out[i]:
             out[i] = out[i - 1]
     return out
 
@@ -203,6 +204,18 @@ def timeline(audio_path, tempo, duration_s, progress=lambda m: None, known_event
     proba = np.zeros((len(rows), len(STEMS)))
     p = clf.predict_proba(np.array(rows))
     proba[:, list(clf.classes_)] = p
+    # Training labels required the followed stem to hold >= MIN_AUDIBLE of
+    # the window's energy; enforce the same at inference, or a silent
+    # stem with a few hallucinated onsets can win a window (Dubstep Is
+    # Dead drop: "guitar 1.00" at 1% guitar energy).
+    for j, i in enumerate(keep):
+        f = feats[i]
+        for n, stem in enumerate(STEMS):
+            if f[stem]["energy"] < MIN_AUDIBLE:
+                proba[j][n] = 0.0
+        total = proba[j].sum()
+        if total > 0:
+            proba[j] /= total
     out = []
     labels = []
     for j, i in enumerate(keep):
@@ -232,6 +245,7 @@ RESCUE_STARVED_RATIO = 0.5        # chart holds < half the stem's onsets
 RESCUE_ONSET_DELTA = 0.07         # librosa peak-pick threshold (tested)
 RESCUE_NOTE_WINDOW_S = 0.12
 RESCUE_MIN_SPAN = 1.3             # centroid p90/p10 below this: static
+RESCUE_MIN_SHARE = 0.10           # stem must carry this much of the window
 
 
 def _centroids(signal, sr, times):
@@ -280,22 +294,30 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
     by_tick = {t for t, _, _ in expert}
     added = []
     touched = 0
+    # Onsets are picked on the WHOLE stem once: peak-picking normalises
+    # within the signal it is given, so a run segment of a near-silent
+    # stem would manufacture dozens of "onsets" out of noise.
+    peaks = {}
+    for stem in RESCUE_STEMS:
+        env = librosa.onset.onset_strength(y=mono[stem], sr=sr)
+        frames = librosa.onset.onset_detect(onset_envelope=env, sr=sr, units="frames",
+                                            delta=RESCUE_ONSET_DELTA, backtrack=False)
+        peaks[stem] = (librosa.frames_to_time(frames, sr=sr), env[frames])
+    hop = int(0.05 * sr)
+    envs = {}
+    for stem in STEMS + ("drums",):
+        n = len(mono[stem]) // hop
+        envs[stem] = np.sqrt((mono[stem][:n * hop].reshape(n, hop) ** 2).mean(axis=1))
     for r in followed:
         if r["stem"] not in RESCUE_STEMS:
             continue
         t0, t1 = r["t0"], r["t1"]
         sig = mono[r["stem"]]
-        a, b = int(t0 * sr), int(t1 * sr)
-        seg = sig[a:b]
-        if len(seg) < sr:
+        all_times, all_strengths = peaks[r["stem"]]
+        sel = (all_times >= t0) & (all_times < t1)
+        if not sel.any():
             continue
-        env = librosa.onset.onset_strength(y=seg, sr=sr)
-        frames = librosa.onset.onset_detect(onset_envelope=env, sr=sr, units="frames",
-                                            delta=RESCUE_ONSET_DELTA, backtrack=False)
-        if not len(frames):
-            continue
-        times = librosa.frames_to_time(frames, sr=sr) + t0
-        strengths = env[frames]
+        times, strengths = all_times[sel], all_strengths[sel]
         ticks = [tempo.quantize(t, subdiv=4) for t in times]
         # Starvation is judged per 4-bar WINDOW inside the run: a song-long
         # synth run is well charted on average while its drop is empty
@@ -308,6 +330,13 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
             idx = [i for i, tk in enumerate(ticks) if lo <= tk < hi]
             secs = tempo.beat_to_time(hi / res) - tempo.beat_to_time(lo / res)
             if secs <= 0 or len(idx) / secs < RESCUE_MIN_ONSETS_PER_S:
+                continue
+            # the rescued stem must be audible in this window
+            fa, fb = int(tempo.beat_to_time(lo / res) / 0.05), int(tempo.beat_to_time(hi / res) / 0.05)
+            fb = max(fa + 1, min(fb, min(len(e) for e in envs.values())))
+            means = {st: float(e[fa:fb].mean()) for st, e in envs.items()}
+            tot = sum(means.values())
+            if tot <= 0 or means[r["stem"]] / tot < RESCUE_MIN_SHARE:
                 continue
             present = sum(1 for t in by_tick if lo <= t < hi)
             if present >= RESCUE_STARVED_RATIO * len(idx):

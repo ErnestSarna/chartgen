@@ -1579,6 +1579,10 @@ def test_prominence_windows_smoothing_and_runs():
     assert spans[-1][1] == 40.0
     assert prominence.smooth(["guitar", "sw_other", "guitar", "piano", "piano"]) == \
         ["guitar", "guitar", "guitar", "piano", "piano"]
+    # "no opinion" never spreads over a confident neighbour; a lone
+    # no-opinion window between two agreeing neighbours takes their label
+    assert prominence.smooth([None, "bass", None, "bass", None]) == [None, "bass", "bass", "bass", None]
+    assert prominence.smooth([None, "bass", None, None, "bass"]) == [None, "bass", None, None, "bass"]
     wins = [{"t0": i * 8.0, "t1": (i + 1) * 8.0, "beat0": i * 16, "beat1": (i + 1) * 16,
              "stem": st, "conf": 0.9} for i, st in enumerate(["guitar", "guitar", None, "piano"])]
     rs = prominence.runs(wins)
@@ -1649,7 +1653,8 @@ def test_rhythm_rescue_supplies_a_starved_synth_run():
         sig[a:a + len(n)] = (np.sin(2 * np.pi * f * n / sr) * np.exp(-n / (0.01 * sr))).astype(np.float32)
     silent = np.zeros(8 * sr, dtype=np.float32)
     mono = {"sw_other": np.concatenate([sig, sig]), "bass": np.concatenate([silent, silent]),
-            "guitar": np.concatenate([silent, silent])}
+            "guitar": np.concatenate([silent, silent]), "vocals": np.concatenate([silent, silent]),
+            "piano": np.concatenate([silent, silent]), "drums": np.concatenate([silent, silent])}
     expert = [(0, 0, 0), (4 * res, 1, 0)]  # two notes in 16 s: starved
     runs = [{"t0": 0.0, "t1": 8.0, "beat0": 0, "beat1": 16, "stem": "sw_other", "conf": 0.9},
             {"t0": 8.0, "t1": 16.0, "beat0": 16, "beat1": 32, "stem": "guitar", "conf": 0.9}]

@@ -296,22 +296,30 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
             continue
         times = librosa.frames_to_time(frames, sr=sr) + t0
         strengths = env[frames]
-        if len(times) / (t1 - t0) < RESCUE_MIN_ONSETS_PER_S:
-            continue
-        lo, hi = int(r["beat0"] * res), int(r["beat1"] * res)
-        present = sum(1 for t in by_tick if lo <= t < hi)
-        if present >= RESCUE_STARVED_RATIO * len(times):
-            continue
         ticks = [tempo.quantize(t, subdiv=4) for t in times]
+        # Starvation is judged per 4-bar WINDOW inside the run: a song-long
+        # synth run is well charted on average while its drop is empty
+        # (Go Beyond: 405 chart positions vs 527 human, drop 51 vs 211).
+        step = BARS_PER_WINDOW * 4 * res
         keep = []
         seen = set()
-        for i, tk in enumerate(ticks):
-            if tk in seen or not lo <= tk < hi:
+        for lo in range(int(r["beat0"] * res), int(r["beat1"] * res), step):
+            hi = min(lo + step, int(r["beat1"] * res))
+            idx = [i for i, tk in enumerate(ticks) if lo <= tk < hi]
+            secs = tempo.beat_to_time(hi / res) - tempo.beat_to_time(lo / res)
+            if secs <= 0 or len(idx) / secs < RESCUE_MIN_ONSETS_PER_S:
                 continue
-            if any(abs(tk - e) <= res // 4 for e in (by_tick & {tk - res // 4, tk, tk + res // 4})):
+            present = sum(1 for t in by_tick if lo <= t < hi)
+            if present >= RESCUE_STARVED_RATIO * len(idx):
                 continue
-            seen.add(tk)
-            keep.append(i)
+            for i in idx:
+                tk = ticks[i]
+                if tk in seen:
+                    continue
+                if any(abs(tk - e) <= res // 4 for e in (by_tick & {tk - res // 4, tk, tk + res // 4})):
+                    continue
+                seen.add(tk)
+                keep.append(i)
         if not keep:
             continue
         lanes = _lanes_from_contour(_centroids(sig, sr, times[keep]), strengths[keep])

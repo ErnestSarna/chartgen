@@ -1591,6 +1591,44 @@ def test_prominence_windows_smoothing_and_runs():
     assert len(vec) == 5 * 5 + 1 + 2 * 10, len(vec)
 
 
+def test_taps_follow_the_instrument_runs():
+    """With a followed-instrument timeline, tap sections ARE the runs: a
+    synth/piano run taps whole, a guitar run stays strummed, a run with
+    no opinion falls back to the keyed-share rule on its own span."""
+    from chartgen import taps
+    from chartgen.tempo import TempoMap
+
+    tm = TempoMap(beat_times=np.arange(0, 120, 0.5), pickup_beats=0)  # 120 bpm, 8 s per run
+    res = tm.resolution
+    sr = 44100
+    q = np.full(24 * sr, 0.01, dtype=np.float32)
+    L = np.full(24 * sr, 0.3, dtype=np.float32)
+    # audio: synth-led throughout, so the keyed rule alone would tap everything
+    mono = {"drums": q, "bass": q, "vocals": q * 0, "guitar": q * 0, "piano": q, "sw_other": L}
+    mono["other"] = mono["guitar"] + mono["piano"] + mono["sw_other"]
+    notes = [(t, 0, 0) for t in range(0, 48 * res, res // 2)]  # 8ths for 24 s
+    runs = [{"t0": 0.0, "t1": 8.0, "beat0": 0, "beat1": 16, "stem": "sw_other", "conf": 0.9},
+            {"t0": 8.0, "t1": 16.0, "beat0": 16, "beat1": 32, "stem": "guitar", "conf": 0.9},
+            {"t0": 16.0, "t1": 24.0, "beat0": 32, "beat1": 48, "stem": None, "conf": 0.4}]
+    from chartgen import stems as stemsmod
+    stemsmod._CACHE.clear()
+    stemsmod._CACHE["fake"] = mono
+    real = stemsmod.separate
+    stemsmod.separate = lambda path, progress=None, backend=None: mono
+    try:
+        chosen = taps.detect(notes, np.zeros(sr), sr, tm, audio_path="fake",
+                             section_marks=[(0, "a")], followed=runs)
+    finally:
+        stemsmod.separate = real
+        stemsmod._CACHE.clear()
+    first = {t for t, _, _ in notes if t < 16 * res}
+    second = {t for t, _, _ in notes if 16 * res <= t < 32 * res}
+    third = {t for t, _, _ in notes if t >= 32 * res}
+    assert first <= chosen, "synth run taps whole"
+    assert not (second & chosen), "guitar run stays strummed even on synth-led audio"
+    assert third <= chosen, "no-opinion run falls back to the keyed rule (synth-led -> tap)"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

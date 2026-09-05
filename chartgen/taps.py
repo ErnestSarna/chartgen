@@ -250,8 +250,18 @@ def keys_by_span(spans_s, mono, sr):
     return out
 
 
+# Followed-instrument runs (chartgen.prominence): a run followed on keys or
+# synth taps whole, one followed on guitar, bass or vocals stays strummed,
+# and a run the model had no opinion on falls back to the keyed-share
+# rule on its own span. The runs are 4-bar-granular and smoothed, so the
+# Sexualizer case - a 20 s guitar passage inside a synth song, which one
+# 57 s chroma section averaged into "tap it all" - gets its own run.
+TAP_STEMS = ("piano", "sw_other")
+STRUM_STEMS = ("guitar", "bass", "vocals")
+
+
 def detect(notes, y, sr, tempo, progress=lambda m: None,
-           audio_path=None, section_marks=None) -> set[int]:
+           audio_path=None, section_marks=None, followed=None) -> set[int]:
     """Tap ticks for this chart, or an empty set when nothing reads soft.
 
     Two-level decision. Sections classify by their FOREGROUND. With the
@@ -290,10 +300,17 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
 
     from . import stems as stemsmod
 
-    bounds = [t for t, _ in sorted(section_marks)] + [ticks[-1] + 1]
-    spans = list(zip(bounds, bounds[1:]))
-    spans_s = [(tempo.beat_to_time(a / res), tempo.beat_to_time(b / res))
-               for a, b in spans]
+    stems_of = None
+    if followed:
+        # Sections ARE the followed-instrument runs.
+        spans = [(int(r["beat0"] * res), int(r["beat1"] * res)) for r in followed]
+        spans_s = [(r["t0"], r["t1"]) for r in followed]
+        stems_of = [r["stem"] for r in followed]
+    else:
+        bounds = [t for t, _ in sorted(section_marks)] + [ticks[-1] + 1]
+        spans = list(zip(bounds, bounds[1:]))
+        spans_s = [(tempo.beat_to_time(a / res), tempo.beat_to_time(b / res))
+                   for a, b in spans]
     import librosa
 
     chosen: set[int] = set()
@@ -301,21 +318,35 @@ def detect(notes, y, sr, tempo, progress=lambda m: None,
     soft_sections = band_sections = 0
     keyed = keys_by_span(spans_s, mono, stemsmod.SR)
     if keyed is not None:
-        # v4: instrument keying on the true stems (see KEYS_TAP_SHARE).
-        rule = "keys/synth"
-        for (a, b), score in zip(spans, keyed):
+        # v4: instrument keying on the true stems (see KEYS_TAP_SHARE), or
+        # the followed-instrument run's stem when a timeline is given.
+        rule = "followed-instrument" if stems_of else "keys/synth"
+        fallback = 0
+        for i, ((a, b), score) in enumerate(zip(spans, keyed)):
             inside = [n for n in notes if a <= n[0] < b]
             if not inside:
                 continue
+            stem = stems_of[i] if stems_of else None
+            if stem in TAP_STEMS:
+                tap = True
+            elif stem in STRUM_STEMS:
+                tap = False
+            else:
+                # no run, or a run with no opinion: the keyed-share rule
+                tap = score >= KEYS_TAP_SHARE
+                fallback += bool(stems_of)
             # Whole sections only: the note-level phrase fallback for the
             # middle band was playtested on In the End (2026-09-03) and
             # rejected - it mixed taps and strums inside guitar-forward
             # verses. A section either taps whole or not at all.
-            if score >= KEYS_TAP_SHARE:
+            if tap:
                 chosen.update(section_tap_ticks(inside))
                 soft_sections += 1
             else:
                 band_sections += 1
+        if stems_of and fallback:
+            progress(f"      taps: {fallback} run(s) without a followed instrument "
+                     f"decided by the keyed-share rule")
     else:
         # v3: shim/Demucs foreground dominance with a centroid guard.
         rule = "soft"

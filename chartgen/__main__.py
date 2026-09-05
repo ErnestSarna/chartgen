@@ -152,6 +152,11 @@ def build_args(argv):
                          "single notes the guitar's second voice on strummed "
                          "chord songs (runs only when the chart is already "
                          "chord-textured and a real guitar is present)")
+    ap.add_argument("--prominence", action=argparse.BooleanOptionalAction, default=False,
+                    help="compute the followed-instrument timeline (which stem a "
+                         "charter would follow, per 4 bars, from the SW stems and a "
+                         "model trained on 299 human charts) and let taps decide "
+                         "sections from it; costs four extra stem transcriptions")
     ap.add_argument("--no-triple-riffs", action="store_true",
                     help="never voice chord runs as three-note chords; by "
                          "default a song whose transcription shows recurring "

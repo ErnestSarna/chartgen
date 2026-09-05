@@ -398,7 +398,9 @@ class App:
         self.sections = tk.BooleanVar(value=saved.get("sections", True))
         self.hopos = tk.BooleanVar(value=saved.get("hopos", True))
         self.lyrics = tk.BooleanVar(value=saved.get("lyrics", True))
-        self.taps = tk.BooleanVar(value=saved.get("taps", True))
+        # "taps_v2": taps became on-by-default on 2026-09-05; the old key holds the
+        # old default (False) in every existing settings.json, so it is ignored.
+        self.taps = tk.BooleanVar(value=saved.get("taps_v2", True))
         self.solos = tk.BooleanVar(value=saved.get("solos", True))
         self.opens = tk.BooleanVar(value=saved.get("opens", True))
         # One row of eight fits only with tight spacing: the labels
@@ -951,7 +953,7 @@ class App:
             "target_diff": self.target_diff.get(), "lyrics": self.lyrics.get(),
             "engine": self.engine.get(),
             "lyric_source": self.lyric_source.get(),
-            "taps": self.taps.get(),
+            "taps_v2": self.taps.get(),
             "solos": self.solos.get(),
             "opens": self.opens.get(),
         }

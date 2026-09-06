@@ -532,11 +532,21 @@ def test_admit_stem_events_gates():
     out = admit_stem_events(stem_ev, runs, kept, t)
     assert all(t.quantize(s, subdiv=4) != t.quantize(inside + 0.09, subdiv=4)
                for s, _, _, _ in out), out
-    # two stems cannot double-admit the same tick
-    twice = [(inside, inside + 0.3, 45, 0.5),
-             (inside + 0.01, inside + 0.2, 50, 0.5)]
-    out = admit_stem_events(twice, runs, [], t)
-    assert len(out) == 1, out
+    # within ONE stem, two comparable notes of different pitch on an empty
+    # tick are a chord (charters write chords where rescue used to write
+    # singles); a same-pitch twin is still one note
+    pair = [(inside, inside + 0.3, 45, 0.5),
+            (inside + 0.01, inside + 0.2, 50, 0.5)]
+    out = admit_stem_events(pair, runs, [], t)
+    assert len(out) == 2, out
+    twin = [(inside, inside + 0.3, 45, 0.5),
+            (inside + 0.01, inside + 0.2, 45, 0.5)]
+    assert len(admit_stem_events(twin, runs, [], t)) == 1
+    # two STEMS cannot double-admit the same tick: the second stem sees the
+    # first's admissions among the kept events and is refused there
+    first = admit_stem_events([(inside, inside + 0.3, 45, 0.5)], runs, [], t)
+    second = admit_stem_events([(inside + 0.01, inside + 0.2, 50, 0.5)], runs, first, t)
+    assert second == [], second
 
 
 def test_fallback_ignores_rumble_and_ghosts():

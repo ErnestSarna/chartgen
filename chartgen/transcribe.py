@@ -558,7 +558,7 @@ def admit_stem_events(stem_events, runs_sec, kept_events, tempo,
     """
     taken = {tempo.quantize(s, subdiv=4) for s, _, p, a in kept_events
              if p >= min_pitch and a >= min_amplitude}
-    out = []
+    by_tick: dict[int, list] = {}
     for start, end, pitch, amp in stem_events:
         if amp < min_amplitude or pitch < BASS_MIN_PITCH:
             continue
@@ -567,12 +567,28 @@ def admit_stem_events(stem_events, runs_sec, kept_events, tempo,
         tick = tempo.quantize(start, subdiv=4)
         if tick in taken:
             continue  # the moment is already charted; a twin is not a rescue
-        lifted = pitch
-        while lifted < min_pitch:
-            lifted += 12
-        out.append((start, end, lifted, amp))
+        by_tick.setdefault(tick, []).append((amp, start, end, pitch))
+    # An empty tick may take a CHORD from the stem: the loudest note plus
+    # one comparable partner of a different pitch, the mix path's own
+    # chord rule. Rescue used to keep one note per tick, so every rescued
+    # passage came out as a single-note line where charters write chords
+    # (A/B report 2026-09-06: human 100% chords in Gnaw's rescued windows,
+    # 55% in Voyager's, ours 0% under either rescue rule).
+    out = []
+    for tick in sorted(by_tick):
+        group = sorted(by_tick[tick], reverse=True)
+        chosen = [group[0]]
+        for cand in group[1:]:
+            if cand[0] >= CHORD_AMPLITUDE_RATIO * group[0][0] and cand[3] != group[0][3]:
+                chosen.append(cand)
+                break  # MAX_CHORD is 2
+        for amp, start, end, pitch in chosen:
+            lifted = pitch
+            while lifted < min_pitch:
+                lifted += 12
+            out.append((start, end, lifted, amp))
         taken.add(tick)  # stems must not duplicate each other either
-    return out
+    return sorted(out)
 
 
 def stem_rescue_events(events, tempo, stems: dict, progress=lambda m: None,

@@ -1746,6 +1746,27 @@ def test_keyed_rescue_fills_a_starved_window_from_the_followed_stem():
     assert touched2 == 0 and not extra2
 
 
+def test_stem_rescue_admits_chords_on_empty_ticks():
+    """Two comparable stem notes on an empty tick come through as a chord;
+    a weak partner does not; a tick the mix already holds admits nothing."""
+    from chartgen import transcribe
+    from chartgen.tempo import TempoMap
+
+    tm = TempoMap(beat_times=np.arange(0, 60, 0.5), pickup_beats=0)
+    beat = 0.5
+    kept = [(0.0, 0.3, 60, 0.8)]
+    stem = [(beat, 0.3, 64, 0.6), (beat, 0.3, 67, 0.5),          # comparable pair -> chord
+            (2 * beat, 0.3, 62, 0.6), (2 * beat, 0.3, 69, 0.2),  # weak partner -> single
+            (0.0, 0.3, 72, 0.9)]                                  # taken tick -> nothing
+    out = transcribe.admit_stem_events(stem, [(0.0, 4.0)], kept, tm, 40, 0.2)
+    ticks = {}
+    for s0, _, p, _ in out:
+        ticks.setdefault(tm.quantize(s0, subdiv=4), []).append(p)
+    assert sorted(ticks[tm.quantize(beat, subdiv=4)]) == [64, 67]
+    assert ticks[tm.quantize(2 * beat, subdiv=4)] == [62]
+    assert tm.quantize(0.0, subdiv=4) not in ticks
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

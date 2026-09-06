@@ -520,6 +520,11 @@ KEYED_MIN_SHARE = 0.10         # and be audible in the window
 # stricter admission cannot widen what counts as starved. That metric is
 # timing-only - it cannot see the instrument prior, which is the point.
 KEYED_ADMIT_AMPLITUDE = 0.40
+# A busy synth stem transcribes more positions than a charter writes: in
+# Sexualizer's rescued windows keyed rescue reached 1.6 notes per human
+# note (A/B report 2026-09-06). A window may not end up denser than
+# 8th-note density; the strongest stem notes are kept up to the budget.
+KEYED_MAX_PER_BEAT = 2.0
 
 
 def keyed_rescue_events(events, windows, stem_events, tempo,
@@ -559,6 +564,17 @@ def keyed_rescue_events(events, windows, stem_events, tempo,
                                              min_pitch, admit_amplitude)
         if not extra:
             continue
+        # density budget: positions (chords count once), strongest first
+        beats = (hi - lo) / tempo.resolution
+        allowed = max(0, int(KEYED_MAX_PER_BEAT * beats) - present)
+        ticks_of = {}
+        for e in extra:
+            ticks_of.setdefault(tempo.quantize(e[0], subdiv=4), []).append(e)
+        if len(ticks_of) > allowed:
+            keep_ticks = sorted(ticks_of, key=lambda tk: -max(e[3] for e in ticks_of[tk]))[:allowed]
+            extra = [e for tk in keep_ticks for e in ticks_of[tk]]
+            if not extra:
+                continue
         added += extra
         known += extra
         touched += 1

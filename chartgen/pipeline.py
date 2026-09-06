@@ -164,7 +164,12 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                     detail = ", ".join(f"{k} {v}" for k, v in counts.items())
                     progress(f"      keyed rescue: {len(extra)} note(s) from the followed "
                              f"stem in {touched} starved window(s) ({detail})")
-            if not extra and not windows and transcribe.starved_runs(events, tempo):
+            # Song-level fallback: where keyed rescue found nothing anywhere
+            # (no timeline, or no followed stem playing in the starved
+            # windows), the blended stem rescue still fills starved runs.
+            # Measured on 16 songs: keyed 0.71 precision vs blended 0.70,
+            # and three songs fire only the blended one (Emmure: 225 notes).
+            if not extra and transcribe.starved_runs(events, tempo):
                 # Starved stretches first get the strong medicine: transcribe
                 # the isolated stems there (separation removes the masking
                 # that collapsed the mix transcription). Demucs results are

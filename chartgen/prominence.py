@@ -510,13 +510,26 @@ KEYED_STEMS = ("guitar", "piano", "sw_other")
 KEYED_STARVED_RATIO = 0.5      # chart holds < half the stem's positions
 KEYED_MIN_STEM_PER_S = 2.0     # the stem must be playing a line, not a pad
 KEYED_MIN_SHARE = 0.10         # and be audible in the window
+# Admitted notes need a stronger posterior than the mix path's 0.20: a
+# separated stem's weak notes are bleed and artifacts far more often than
+# a mix's. Sweep on 16 songs (work/keyed_rescue_sweep.txt), precision
+# against human note times within 80 ms: 0.69 at 0.20, 0.71 at 0.40 (best
+# on 8 of 13 songs, 71 notes/song), 0.74 at 0.50 but with fewer notes
+# (58) than the shipped blended rescue (0.70, 69 notes). 0.40 keeps the
+# coverage; the starvation test itself keeps the standard floors so a
+# stricter admission cannot widen what counts as starved. That metric is
+# timing-only - it cannot see the instrument prior, which is the point.
+KEYED_ADMIT_AMPLITUDE = 0.40
 
 
 def keyed_rescue_events(events, windows, stem_events, tempo,
-                        min_pitch: int = 40, min_amplitude: float = 0.20):
+                        min_pitch: int = 40, min_amplitude: float = 0.20,
+                        admit_amplitude: float = None):
     """Extra transcription events from each starved window's followed
     stem. Returns (events_to_add, windows_touched, stem_counts)."""
     from . import transcribe
+
+    admit_amplitude = KEYED_ADMIT_AMPLITUDE if admit_amplitude is None else admit_amplitude
 
     kept: dict = {}
     for s0, _, pch, amp in events:
@@ -543,7 +556,7 @@ def keyed_rescue_events(events, windows, stem_events, tempo,
         if present >= KEYED_STARVED_RATIO * len(stem_pos):
             continue
         extra = transcribe.admit_stem_events(stem_events[stem], [(t0, t1)], known, tempo,
-                                             min_pitch, min_amplitude)
+                                             min_pitch, admit_amplitude)
         if not extra:
             continue
         added += extra

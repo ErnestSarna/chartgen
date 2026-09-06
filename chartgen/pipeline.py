@@ -157,7 +157,7 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                 progress("      followed instrument: no timeline (model or SW stems unavailable)")
         if not getattr(opts, "no_bass_fallback", False):
             extra = []
-            if windows:
+            if windows and not getattr(opts, "no_keyed_rescue", False):
                 extra, touched, counts = prominence.keyed_rescue_events(
                     events, windows, stem_events, tempo)
                 if extra:

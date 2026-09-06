@@ -156,6 +156,10 @@ def build_args(argv):
                          "charter would follow, per 4 bars, from the SW stems and a "
                          "model trained on 299 human charts) and let taps decide "
                          "sections from it; costs four extra stem transcriptions; on by default, --no-prominence to skip)")
+    ap.add_argument("--no-keyed-rescue", action="store_true",
+                    help="A/B switch: fill starved stretches with the old blended "
+                         "other+bass stem rescue instead of the followed stem's own "
+                         "transcription (everything else unchanged)")
     ap.add_argument("--no-triple-riffs", action="store_true",
                     help="never voice chord runs as three-note chords; by "
                          "default a song whose transcription shows recurring "

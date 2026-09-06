@@ -230,7 +230,17 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                 positions.setdefault(t, set()).add(l)
             share = (sum(1 for v in positions.values()
                          if len(v - {7}) >= 2) / max(1, len(positions)))
-            if share >= guitarmod.TRIGGER_CHORD_SHARE:
+            # The chart-share trigger alone missed every chug song: Gnaw
+            # and Metabolic came out at 6% and 1% chords against human 59%
+            # and 52%, because a chart that starts as singles never
+            # reaches 20%. With a timeline, guitar-followed windows open
+            # the gate instead, and the pass only voices runs inside them.
+            guitar_spans = None
+            if windows:
+                guitar_spans = [(int(w["beat0"] * res), int(w["beat1"] * res))
+                                for w in windows if w.get("stem") == "guitar"]
+            guitar_led = bool(guitar_spans) and len(guitar_spans) >= 0.25 * len(windows)
+            if share >= guitarmod.TRIGGER_CHORD_SHARE or guitar_led:
                 g = guitarmod.separate_guitar(str(audio), progress)
                 gshare = guitarmod.guitar_share(g)
                 if gshare >= guitarmod.MIN_GUITAR_SHARE:
@@ -249,7 +259,9 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                         finally:
                             Path(gpath).unlink(missing_ok=True)
                     voices = guitarmod.second_voices(gevents, tempo)
-                    expert, added = guitarmod.chordify(expert, voices, res)
+                    expert, added = guitarmod.chordify(
+                        expert, voices, res,
+                        allowed_spans=guitar_spans if guitar_led else None)
                     if added:
                         progress(f"      guitar texture: {added} single(s) "
                                  f"gained the guitar's second voice (humans "

@@ -1767,6 +1767,25 @@ def test_stem_rescue_admits_chords_on_empty_ticks():
     assert tm.quantize(0.0, subdiv=4) not in ticks
 
 
+def test_chordify_respects_allowed_spans():
+    """With a timeline, chord texture voices only runs inside guitar-
+    followed spans; the same evidence outside them is left single."""
+    from chartgen import guitar as G
+
+    res = 480
+    run_a = [(k * (res // 2), 0, 0) for k in range(8)]            # ticks 0-1680
+    run_b = [(8 * res + k * (res // 2), 0, 0) for k in range(8)]  # ticks 3840-5520
+    voices = {t: (40, 47) for t, _, _ in run_a + run_b}          # a fifth everywhere
+    out, added = G.chordify(run_a + run_b, voices, res, allowed_spans=[(0, 4 * res)])
+    lanes = {}
+    for t, l, _ in out:
+        lanes.setdefault(t, set()).add(l)
+    assert all(len(lanes[t]) == 2 for t, _, _ in run_a), "run inside the span is voiced"
+    assert all(len(lanes[t]) == 1 for t, _, _ in run_b), "run outside stays single"
+    out_all, added_all = G.chordify(run_a + run_b, voices, res)
+    assert added_all > added
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

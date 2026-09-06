@@ -34,8 +34,9 @@ TRIGGER_CHORD_SHARE = 0.20
 MIN_GUITAR_SHARE = 0.10
 # A second voice must be comparable to the first, same ratio as the mix path.
 COMPARABLE = 0.65
-# Human punk tops out around 67% chord positions; never chordify past this.
-MAX_CHORD_SHARE = 0.55
+# Human punk tops out around 67% chord positions; metal chug charts sit at
+# 52-59% (Slipknot Metabolic, Haste the Day Gnaw); never chordify past this.
+MAX_CHORD_SHARE = 0.60
 # Run-uniform promotion (the shape-coherence fix): a run of singles gains
 # the second voice as a unit or not at all, so the riff keeps one shape.
 # The support bar is LOW for the same reason the triple rule's is: the stem
@@ -119,8 +120,12 @@ def _runs(ticks, resolution):
     return runs
 
 
-def chordify(notes, voices, resolution: int):
+def chordify(notes, voices, resolution: int, allowed_spans=None):
     """Give whole single-note RUNS the guitar's second voice, uniformly.
+
+    `allowed_spans`: optional [(tick0, tick1)] - with a followed-instrument
+    timeline, only runs starting inside a guitar-followed span are voiced,
+    so a synth song never inherits guitar-stem bleed as chords.
 
     Per-tick addition was the first version and it repeated the mistake
     raw MAX_CHORD=3 made: evidence arrives at scattered ticks (the stem
@@ -162,6 +167,8 @@ def chordify(notes, voices, resolution: int):
         if budget <= 0:
             break
         if len(run) < CHORDIFY_MIN_RUN:
+            continue
+        if allowed_spans is not None and not any(a <= run[0] < b for a, b in allowed_spans):
             continue
         evidenced = [t for t in run if t in voices]
         if (len(evidenced) < CHORDIFY_MIN_EVIDENCED

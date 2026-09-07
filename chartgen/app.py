@@ -364,7 +364,7 @@ class App:
         saved_lyrics = saved.get("lyric_source")
         self.lyric_source = tk.StringVar(
             value=saved_lyrics if saved_lyrics in LYRIC_SOURCES else list(LYRIC_SOURCES)[0])
-        label = ttk.Label(frame, text="Lyrics from")
+        label = ttk.Label(frame, text="Lyrics")
         label.grid(row=0, column=4, sticky="w")
         combo = ttk.Combobox(frame, textvariable=self.lyric_source,
                              values=list(LYRIC_SOURCES), state="readonly", width=18)

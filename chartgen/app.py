@@ -231,7 +231,6 @@ class App:
         self._build_input(saved)
         self._section("Options", row=3)
         self._build_options(saved)
-        self._build_advanced(saved)
         self._build_actions()
         self._section("Progress", row=8)
         self._build_output()
@@ -337,9 +336,12 @@ class App:
     def _build_options(self, saved):
         """The choices that change what kind of chart you get."""
         frame = self._card(row=4)
-        for col in (1, 3):
+        for col in (1, 3, 5):
             frame.columnconfigure(col, weight=1)
 
+        # One row of three pickers: the former Advanced panel had only two
+        # knobs left once the neural engine's settings went, so they sit
+        # beside Max difficulty instead of behind a collapsed header.
         self.target_diff = tk.StringVar(value=saved.get("target_diff", "Auto"))
         label = ttk.Label(frame, text="Max difficulty")
         label.grid(row=0, column=0, sticky="w")
@@ -349,8 +351,25 @@ class App:
         combo.grid(row=0, column=1, sticky="w", padx=10)
         self._tip("target_diff", label, combo)
 
+        self.grid_choice = tk.StringVar(value=saved.get("grid", list(GRIDS)[0]))
+        label = ttk.Label(frame, text="Note grid")
+        label.grid(row=0, column=2, sticky="w")
+        combo = ttk.Combobox(frame, textvariable=self.grid_choice, values=list(GRIDS),
+                             state="readonly", width=20)
+        combo.grid(row=0, column=3, sticky="w", padx=10)
+        self._tip("grid", label, combo)
+
+        self.lyric_source = tk.StringVar(
+            value=saved.get("lyric_source", list(LYRIC_SOURCES)[0]))
+        label = ttk.Label(frame, text="Lyrics from")
+        label.grid(row=0, column=4, sticky="w")
+        combo = ttk.Combobox(frame, textvariable=self.lyric_source,
+                             values=list(LYRIC_SOURCES), state="readonly", width=24)
+        combo.grid(row=0, column=5, sticky="w", padx=10)
+        self._tip("lyric_source", label, combo)
+
         toggles = ttk.Frame(frame)
-        toggles.grid(row=1, column=0, columnspan=4, sticky="w", pady=(12, 0))
+        toggles.grid(row=1, column=0, columnspan=6, sticky="w", pady=(12, 0))
         self.sustains = tk.BooleanVar(value=saved.get("sustains", True))
         self.star_power = tk.BooleanVar(value=saved.get("star_power", True))
         self.sections = tk.BooleanVar(value=saved.get("sections", True))
@@ -376,50 +395,6 @@ class App:
             box = ttk.Checkbutton(toggles, text=text, variable=var)
             box.pack(side="left", padx=(0, 8))
             self._tip(key, box)
-
-    def _build_advanced(self, saved):
-        """The technical knobs; the defaults are the calibrated champions.
-
-        Collapsed by default so the everyday screen stays simple; clicking the
-        header toggles it. grid_remove() keeps the grid options, so re-showing
-        is a plain grid() and the log card soaks up the height either way.
-        """
-        self.adv_open = False
-        self.adv_head = ttk.Label(self.root, text="ADVANCED  ▸", foreground=MUTED,
-                                  font=("Segoe UI", 8, "bold"), cursor="hand2")
-        self.adv_head.grid(row=5, column=0, sticky="w", padx=22, pady=(14, 4))
-        self.adv_head.bind("<Button-1>", self._toggle_advanced)
-
-        frame = self.adv_card = self._card(row=6)
-        for col in (1, 3):
-            frame.columnconfigure(col, weight=1)
-
-        self.grid_choice = tk.StringVar(value=saved.get("grid", list(GRIDS)[0]))
-        label = ttk.Label(frame, text="Note grid")
-        label.grid(row=0, column=0, sticky="w")
-        combo = ttk.Combobox(frame, textvariable=self.grid_choice, values=list(GRIDS),
-                             state="readonly", width=22)
-        combo.grid(row=0, column=1, sticky="w", padx=10)
-        self._tip("grid", label, combo)
-
-        self.lyric_source = tk.StringVar(
-            value=saved.get("lyric_source", list(LYRIC_SOURCES)[0]))
-        label = ttk.Label(frame, text="Lyrics from")
-        label.grid(row=1, column=0, sticky="w", pady=(8, 0))
-        combo = ttk.Combobox(frame, textvariable=self.lyric_source,
-                             values=list(LYRIC_SOURCES), state="readonly", width=22)
-        combo.grid(row=1, column=1, sticky="w", padx=10, pady=(8, 0))
-        self._tip("lyric_source", label, combo)
-        frame.grid_remove()
-
-    def _toggle_advanced(self, _event=None):
-        self.adv_open = not self.adv_open
-        if self.adv_open:
-            self.adv_card.grid()
-        else:
-            self.adv_card.grid_remove()
-        self.adv_head.configure(
-            text="ADVANCED  ▾" if self.adv_open else "ADVANCED  ▸")
 
     def _build_actions(self):
         frame = ttk.Frame(self.root)

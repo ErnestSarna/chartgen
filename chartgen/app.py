@@ -30,9 +30,9 @@ GRIDS = {"16th notes (default)": 4, "8th notes (sparser)": 2, "Triplet 8ths": 3}
 # "Thank you for watching". Looking the song up first avoids the guesswork
 # entirely when someone has already synced it.
 LYRIC_SOURCES = {
-    "Look up online, else listen": "auto",
-    "Look up online only": "online",
-    "Listen to the vocals": "transcribe",
+    "Online, else listen": "auto",
+    "Online only": "online",
+    "Listen": "transcribe",
 }
 
 
@@ -359,12 +359,15 @@ class App:
         combo.grid(row=0, column=3, sticky="w", padx=10)
         self._tip("grid", label, combo)
 
+        # Labels were shortened 2026-09-07; a saved long label falls back to
+        # the default rather than showing stale text the map cannot resolve.
+        saved_lyrics = saved.get("lyric_source")
         self.lyric_source = tk.StringVar(
-            value=saved.get("lyric_source", list(LYRIC_SOURCES)[0]))
+            value=saved_lyrics if saved_lyrics in LYRIC_SOURCES else list(LYRIC_SOURCES)[0])
         label = ttk.Label(frame, text="Lyrics from")
         label.grid(row=0, column=4, sticky="w")
         combo = ttk.Combobox(frame, textvariable=self.lyric_source,
-                             values=list(LYRIC_SOURCES), state="readonly", width=24)
+                             values=list(LYRIC_SOURCES), state="readonly", width=18)
         combo.grid(row=0, column=5, sticky="w", padx=10)
         self._tip("lyric_source", label, combo)
 

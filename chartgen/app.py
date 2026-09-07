@@ -24,22 +24,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import pipeline
 
 SETTINGS = Path(os.environ.get("APPDATA", Path.home())) / "chartgen" / "settings.json"
-MODELS = {
-    "Quality (M, ~225M params)": "3podi/charter-v1.0-40-M-best-acc",
-    "Fast (S, ~25M params)": "3podi/charter-v1.0-40-S-best-acc",
-}
 GRIDS = {"16th notes (default)": 4, "8th notes (sparser)": 2, "Triplet 8ths": 3}
-# Named from the playtest verdict rather than the implementation: the neural
-# model samples, so it "does some things better and some worse — bigger wins
-# but bigger losses", while transcription is deterministic and steadier.
-ENGINES = {
-    "Transcription — steady (default)": "basicpitch",
-    "Neural model — bigger highs and lows": "audio2chart",
-}
-FRET_MODES = {
-    "Follow the melody (pitch)": "pitch",
-    "Raw model output": "model",
-}
 # Transcribing vocals invents words over instrumental outros - Whisper falls
 # back on the YouTube captions it was trained on, and a real chart ended with
 # "Thank you for watching". Looking the song up first avoids the guesswork
@@ -174,11 +159,6 @@ TIPS = {
     "outdir": "Each song becomes its own folder here with notes.chart, "
               "audio and album art. Point it at your Clone Hero songs "
               "folder and new charts appear after a rescan.",
-    "engine": "Where Expert notes come from. Transcription reads the "
-              "audio's actual pitches - deterministic, same chart every "
-              "run. The neural model is a generator: sometimes better "
-              "ideas, sometimes worse, so it rolls several times and keeps "
-              "the roll that best matches the audio.",
     "target_diff": "Caps the difficulty badge (0-6). The chart is thinned "
                    "until it rates at or below this, and the whole "
                    "Easy-Expert ladder scales down with it. Auto keeps "
@@ -217,26 +197,12 @@ TIPS = {
     "grid": "The finest rhythm notes can land on. 16ths fit almost "
             "everything; 8ths force a sparser, easier chart; triplet 8ths "
             "suit shuffle/swing songs.",
-    "attempts": "Neural source only: reroll up to this many times if a "
-                "chart scores poorly, keeping the best roll. A good first "
-                "roll stops early, so high values only cost time on "
-                "difficult songs.",
-    "fret_mode": "How notes pick their lane (green-orange). Follow the "
-                 "melody: lanes track the audio's pitch, so repeated notes "
-                 "repeat and rising lines rise. Raw model output is "
-                 "pitch-blind - kept for comparison.",
-    "sustain_gap": "Beats of empty space needed after a note before it "
-                   "becomes a sustain. Lower = more and shorter sustains; "
-                   "higher = only clearly-held notes sustain.",
     "lyric_source": "Look up online: fetch hand-synced lyrics from LRCLIB "
                     "(free, no account) - the right words with human "
                     "timing. Listen: transcribe the vocals locally with "
                     "Whisper, which can mishear or invent words over "
                     "instrumental outros. Default tries the lookup and "
                     "only listens when the song isn't in the database.",
-    "model": "Checkpoint for the neural source. Quality (M) charts "
-             "better; Fast (S) is ~9x smaller and quicker. Ignored by "
-             "the transcription source.",
 }
 
 
@@ -374,21 +340,13 @@ class App:
         for col in (1, 3):
             frame.columnconfigure(col, weight=1)
 
-        self.engine = tk.StringVar(value=saved.get("engine", list(ENGINES)[0]))
-        label = ttk.Label(frame, text="Note source")
-        label.grid(row=0, column=0, sticky="w")
-        combo = ttk.Combobox(frame, textvariable=self.engine, values=list(ENGINES),
-                             state="readonly", width=32)
-        combo.grid(row=0, column=1, sticky="w", padx=10)
-        self._tip("engine", label, combo)
-
         self.target_diff = tk.StringVar(value=saved.get("target_diff", "Auto"))
         label = ttk.Label(frame, text="Max difficulty")
-        label.grid(row=0, column=2, sticky="w")
+        label.grid(row=0, column=0, sticky="w")
         combo = ttk.Combobox(frame, textvariable=self.target_diff,
                              values=["Auto"] + [str(n) for n in range(7)],
                              state="readonly", width=6)
-        combo.grid(row=0, column=3, sticky="w", padx=10)
+        combo.grid(row=0, column=1, sticky="w", padx=10)
         self._tip("target_diff", label, combo)
 
         toggles = ttk.Frame(frame)
@@ -444,45 +402,14 @@ class App:
         combo.grid(row=0, column=1, sticky="w", padx=10)
         self._tip("grid", label, combo)
 
-        self.attempts = tk.IntVar(value=saved.get("attempts", 3))
-        label = ttk.Label(frame, text="Retries if poor")
-        label.grid(row=0, column=2, sticky="w")
-        spin = ttk.Spinbox(frame, from_=1, to=8, textvariable=self.attempts, width=5)
-        spin.grid(row=0, column=3, sticky="w", padx=10)
-        self._tip("attempts", label, spin)
-
-        self.fret_mode = tk.StringVar(value=saved.get("fret_mode", list(FRET_MODES)[0]))
-        label = ttk.Label(frame, text="Fret choice")
-        label.grid(row=1, column=0, sticky="w", pady=(8, 0))
-        combo = ttk.Combobox(frame, textvariable=self.fret_mode, values=list(FRET_MODES),
-                             state="readonly", width=22)
-        combo.grid(row=1, column=1, sticky="w", padx=10, pady=(8, 0))
-        self._tip("fret_mode", label, combo)
-
-        self.sustain_gap = tk.DoubleVar(value=saved.get("sustain_gap", 1.0))
-        label = ttk.Label(frame, text="Sustain gap (beats)")
-        label.grid(row=1, column=2, sticky="w", pady=(8, 0))
-        spin = ttk.Spinbox(frame, from_=0.25, to=4.0, increment=0.25, width=5,
-                           textvariable=self.sustain_gap)
-        spin.grid(row=1, column=3, sticky="w", padx=10, pady=(8, 0))
-        self._tip("sustain_gap", label, spin)
-
         self.lyric_source = tk.StringVar(
             value=saved.get("lyric_source", list(LYRIC_SOURCES)[0]))
         label = ttk.Label(frame, text="Lyrics from")
-        label.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        label.grid(row=1, column=0, sticky="w", pady=(8, 0))
         combo = ttk.Combobox(frame, textvariable=self.lyric_source,
                              values=list(LYRIC_SOURCES), state="readonly", width=22)
-        combo.grid(row=2, column=1, sticky="w", padx=10, pady=(8, 0))
+        combo.grid(row=1, column=1, sticky="w", padx=10, pady=(8, 0))
         self._tip("lyric_source", label, combo)
-
-        self.model = tk.StringVar(value=saved.get("model", list(MODELS)[0]))
-        label = ttk.Label(frame, text="Neural checkpoint")
-        label.grid(row=3, column=0, sticky="w", pady=(8, 0))
-        combo = ttk.Combobox(frame, textvariable=self.model, values=list(MODELS),
-                             state="readonly", width=22)
-        combo.grid(row=3, column=1, sticky="w", padx=10, pady=(8, 0))
-        self._tip("model", label, combo)
         frame.grid_remove()
 
     def _toggle_advanced(self, _event=None):
@@ -735,14 +662,10 @@ class App:
             # URLs must stay strings; Path("https://…") collapses the //.
             audio=audio if is_url else (Path(audio) if not batch else None),
             outdir=Path(self.outdir.get()),
-            model=MODELS[self.model.get()], subdiv=GRIDS[self.grid_choice.get()],
-            temperature=0.5, top_k=32, attempts=int(self.attempts.get()),
-            min_variety=0.80, min_sustain_gap=float(self.sustain_gap.get()),
+            subdiv=GRIDS[self.grid_choice.get()],
+            min_variety=0.80,
             hopos=self.hopos.get(), no_star_power=not self.star_power.get(),
             no_sections=not self.sections.get(), no_sustains=not self.sustains.get(),
-            engine=ENGINES.get(self.engine.get(), "basicpitch"),
-            min_fidelity=0.60,
-            fret_mode=FRET_MODES.get(self.fret_mode.get(), "pitch"),
             target_diff=(None if self.target_diff.get() == "Auto"
                          else int(self.target_diff.get())),
             lyrics=self.lyrics.get(),
@@ -945,13 +868,11 @@ class App:
 
     def _settings(self) -> dict:
         return {
-            "outdir": self.outdir.get(), "model": self.model.get(),
-            "grid": self.grid_choice.get(), "attempts": self.attempts.get(),
-            "sustain_gap": self.sustain_gap.get(), "sustains": self.sustains.get(),
+            "outdir": self.outdir.get(),
+            "grid": self.grid_choice.get(), "sustains": self.sustains.get(),
             "star_power": self.star_power.get(), "sections": self.sections.get(),
-            "hopos": self.hopos.get(), "fret_mode": self.fret_mode.get(),
+            "hopos": self.hopos.get(),
             "target_diff": self.target_diff.get(), "lyrics": self.lyrics.get(),
-            "engine": self.engine.get(),
             "lyric_source": self.lyric_source.get(),
             "taps_v2": self.taps.get(),
             "solos": self.solos.get(),

@@ -1,13 +1,16 @@
 """The audio -> Clone Hero song folder pipeline, driven by CLI or GUI.
 
-Progress is pushed through a callback rather than printed, so the GUI can show
-it live. Runs take minutes, so there is a cancel hook checked between stages.
+Expert notes come from Basic Pitch transcription (chartgen.transcribe); the
+followed-instrument timeline, rescue passes, texture, reduction and expression
+stages build the song folder from there. Progress is pushed through a callback
+rather than printed, so the GUI can show it live. Runs take minutes, so there
+is a cancel hook checked between stages.
 """
 import shutil
 from pathlib import Path
 
 from . import chart as chartio
-from . import density, expression, frets, pitch as pitchmod, quality, reduce
+from . import density, expression, frets, quality, reduce
 from . import tempo as tempomod
 
 # The only formats the .chart docs list as being in wide use. wav is deliberately
@@ -72,8 +75,6 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
             raise Cancelled()
 
     import librosa
-    import torch
-    from chart.tokenizer import SimpleTokenizerGuitar
 
     from . import youtube
 
@@ -123,309 +124,210 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
              f"{len(tempo.sync_track())} tempo event(s)")
     check()
 
-    engine = getattr(opts, "engine", "basicpitch")
-    if engine == "basicpitch":
-        from . import transcribe
+    from . import transcribe
 
-        progress("[2/6] transcribing (Basic Pitch engine)")
-        events = transcribe.transcribe(str(audio), progress)
-        check()
-        progress("[3/6] building Expert from transcription")
-        # The followed-instrument timeline comes first now: its per-stem
-        # transcriptions feed keyed rescue (below), chord texture and the
-        # rhythm/solo consumers further down.
-        windows = None
-        stem_events = {}
-        if getattr(opts, "prominence", True):
-            from . import prominence
-
-            try:
-                windows = prominence.timeline(str(audio), tempo, duration_s, progress,
-                                              known_events=stem_events)
-            except Exception as error:  # a prior, never worth failing a chart
-                windows = None
-                progress(f"      followed instrument skipped: {type(error).__name__}: {error}")
-            if windows:
-                share = {}
-                for w in windows:
-                    share[w["stem"]] = share.get(w["stem"], 0) + 1
-                mix = ", ".join(f"{(k or 'unsure')} {v / len(windows):.0%}"
-                                for k, v in sorted(share.items(), key=lambda kv: -kv[1]))
-                progress(f"      followed instrument: {prominence.letters(windows)} "
-                         f"({len(prominence.runs(windows))} run(s); {mix})")
-            else:
-                progress("      followed instrument: no timeline (model or SW stems unavailable)")
-        if not getattr(opts, "no_bass_fallback", False):
-            extra = []
-            if windows and not getattr(opts, "no_keyed_rescue", False):
-                extra, touched, counts = prominence.keyed_rescue_events(
-                    events, windows, stem_events, tempo)
-                if extra:
-                    detail = ", ".join(f"{k} {v}" for k, v in counts.items())
-                    progress(f"      keyed rescue: {len(extra)} note(s) from the followed "
-                             f"stem in {touched} starved window(s) ({detail})")
-            # Song-level fallback: where keyed rescue found nothing anywhere
-            # (no timeline, or no followed stem playing in the starved
-            # windows), the blended stem rescue still fills starved runs.
-            # Measured on 16 songs: keyed 0.71 precision vs blended 0.70,
-            # and three songs fire only the blended one (Emmure: 225 notes).
-            if not extra and transcribe.starved_runs(events, tempo):
-                # Starved stretches first get the strong medicine: transcribe
-                # the isolated stems there (separation removes the masking
-                # that collapsed the mix transcription). Demucs results are
-                # cached, so lyrics/solos reuse this same separation later.
-                from . import stems as stemsmod
-
-                st = stemsmod.separate(str(audio), progress)
-                if st is not None:
-                    extra = transcribe.stem_rescue_events(events, tempo, st,
-                                                          progress)
-                    if extra:
-                        progress(f"      stem rescue: {len(extra)} note(s) "
-                                 f"transcribed from isolated stems where the "
-                                 f"mix transcription starves")
-            if not extra:
-                extra = transcribe.bass_fallback_events(events, tempo)
-                if extra:
-                    progress(f"      register fallback: {len(extra)} bass "
-                             f"note(s) admitted where the melodic selection "
-                             f"starves")
-            if extra:
-                events = sorted(events + extra)
-        swing = set()
-        if getattr(opts, "swing", False):
-            # Opt-in: on real songs the detected beat grid's local phase
-            # error (±40ms) exceeds the 55ms separating the two grids, so
-            # per-onset classification misfires on straight songs (Faded
-            # measured 61 wrongly-swung beats). Until beat tracking is that
-            # precise, straight 16ths are the safe default.
-            swing = transcribe.swung_beats(events, tempo)
-            if swing:
-                progress(f"      swing: {len(swing)} beat(s) quantized to "
-                         f"the triplet grid")
-        expert = transcribe.expert_from_notes(
-            events, tempo, subdiv=opts.subdiv,
-            min_sustain_beats=getattr(opts, 'min_sustain_beats', 0.5),
-            allow_opens=getattr(opts, "opens", True),
-            swing_beats=swing,
-            ornaments=not getattr(opts, "no_ornaments", False),
-            max_chord=int(getattr(opts, "max_chord", 2)))
-        orn = sum(1 for t, _, _ in expert
-                  if t % (res // 8) == 0 and t % (res // 4) != 0)
-        if orn:
-            progress(f"      {orn} 32nd grace note(s) recovered from the "
-                     f"transcription")
-        if getattr(opts, "density", "onset") == "onset":
-            before = len({t for t, _, _ in expert})
-            expert = density.gate_by_onsets(expert, y, sr, tempo)
-            after = len({t for t, _, _ in expert})
-            if before > after:
-                progress(f"      density: {before} -> {after} positions")
-        gevents = stem_events.get("guitar")  # from the timeline when it ran
-        if not getattr(opts, "no_guitar_texture", False):
-            from . import guitar as guitarmod
-
-            positions = {}
-            for t, l, _ in expert:
-                positions.setdefault(t, set()).add(l)
-            share = (sum(1 for v in positions.values()
-                         if len(v - {7}) >= 2) / max(1, len(positions)))
-            # The chart-share trigger alone missed every chug song: Gnaw
-            # and Metabolic came out at 6% and 1% chords against human 59%
-            # and 52%, because a chart that starts as singles never
-            # reaches 20%. With a timeline, guitar-followed windows open
-            # the gate instead, and the pass only voices runs inside them.
-            guitar_spans = None
-            if windows:
-                guitar_spans = [(int(w["beat0"] * res), int(w["beat1"] * res))
-                                for w in windows if w.get("stem") == "guitar"]
-            guitar_led = bool(guitar_spans) and len(guitar_spans) >= 0.25 * len(windows)
-            if share >= guitarmod.TRIGGER_CHORD_SHARE or guitar_led:
-                g = guitarmod.separate_guitar(str(audio), progress)
-                gshare = guitarmod.guitar_share(g)
-                if gshare >= guitarmod.MIN_GUITAR_SHARE:
-                    progress(f"      guitar stem active ({gshare:.0%}); "
-                             + ("reusing the timeline's transcription for chord texture"
-                                if gevents is not None else "transcribing it for chord texture"))
-                    if gevents is None:
-                        import soundfile as sf
-                        import tempfile as tf
-
-                        with tf.NamedTemporaryFile(suffix=".wav", delete=False) as fh:
-                            gpath = fh.name
-                        try:
-                            sf.write(gpath, g, guitarmod.SW_SR)
-                            gevents = transcribe.transcribe(gpath)
-                        finally:
-                            Path(gpath).unlink(missing_ok=True)
-                    voices = guitarmod.second_voices(gevents, tempo)
-                    expert, added = guitarmod.chordify(
-                        expert, voices, res,
-                        allowed_spans=guitar_spans if guitar_led else None)
-                    if added:
-                        progress(f"      guitar texture: {added} single(s) "
-                                 f"gained the guitar's second voice (humans "
-                                 f"chart 50-100% chords on strummed songs)")
-                elif g is not None:
-                    progress(f"      guitar stem quiet ({gshare:.0%}); "
-                             f"chord texture unchanged")
-        if not getattr(opts, "no_triple_riffs", False):
-            ev = transcribe.triple_song_evidence(events, tempo)
-            if gevents is not None:
-                # The guitar stem hears the third voice on different strums
-                # than the mix does; pooling them is free evidence.
-                ev = transcribe.merge_triple_evidence(
-                    ev, transcribe.triple_song_evidence(gevents, tempo), tempo)
-            if ev["qualifies"]:
-                expert, promoted = transcribe.promote_triple_runs(
-                    expert, ev, tempo)
-                if promoted:
-                    extra = ev.get("guitar_ticks", 0)
-                    progress(f"      triple riffs: {promoted} chord run(s) "
-                             f"voiced as three-note (evidence share "
-                             f"{ev['share']:.0%}"
-                             + (f", +{extra} ticks from the guitar stem"
-                                if extra else "")
-                             + "; 42% of human charts are triple songs)")
-                else:
-                    # A qualifying song promoting nothing must say so - the
-                    # stairs no-op bug hid behind exactly this silence.
-                    progress(f"      triple song (evidence {ev['share']:.0%})"
-                             f" but no chord run met the promotion grammar")
-        followed = None
-        timeline_solos = None
-        if windows:
-            from . import prominence
-
-            if True:
-                followed = prominence.runs(windows)
-                from . import stems as stemsmod
-
-                st = stemsmod.separate(str(audio), progress, backend="sw")
-                if st is not None:
-                    expert, added, touched = prominence.rhythm_rescue(
-                        expert, followed, st, stemsmod.SR, tempo)
-                    if added:
-                        progress(f"      rhythm rescue: {added} note(s) from synth/bass "
-                                 f"onsets in {touched} starved run(s) (Basic Pitch hears "
-                                 f"9-12% of a drop's notes; stem onsets 45-82%)")
-                solo_model = prominence.load_solo_model()
-                if solo_model is not None:
-                    timeline_solos = prominence.solo_runs(windows, solo_model, tempo)
-                    spans = ", ".join(f"{tempo.beat_to_time(a / res):.0f}-{tempo.beat_to_time(b / res):.0f}s"
-                                      for a, b in timeline_solos)
-                    progress(f"      solos: {len(timeline_solos)} lead break(s) from the "
-                             f"followed-instrument timeline" + (f" ({spans})" if spans else ""))
-        if not expert:
-            raise ValueError(
-                "transcription found no chartable notes — is this audio "
-                "mostly percussion or noise?")
-        best = min(quality.variety_score(expert), quality.walk_score(expert))
-        progress(f"      {quality.describe(expert)}")
-        if best < opts.min_variety:
-            progress(f"      warning: score {best:.2f} below "
-                     f"{opts.min_variety:.2f} (transcription is "
-                     f"deterministic; retries would not change it)")
-        return _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
-                             engine, audio, duration_s, bp_events=events,
-                             followed=followed, timeline_solos=timeline_solos)
-
-    progress(f"[2/6] loading {opts.model}")
-    from .model import PitchCharter, load_charter
-
-    model = load_charter(opts.model)
-    conditioner_path = getattr(opts, "conditioner", None)
-    if conditioner_path:
-        # A trained conditioner makes the model itself pitch-aware; wrap it so
-        # generation feeds pitch into the audio memory.
-        pitched = PitchCharter(model)
-        pitched.conditioner.load_state_dict(
-            torch.load(conditioner_path, map_location="cpu"))
-        model = pitched
-        progress("      pitch conditioner loaded")
+    progress("[2/6] transcribing (Basic Pitch engine)")
+    events = transcribe.transcribe(str(audio), progress)
     check()
+    progress("[3/6] building Expert from transcription")
+    # The followed-instrument timeline comes first now: its per-stem
+    # transcriptions feed keyed rescue (below), chord texture and the
+    # rhythm/solo consumers further down.
+    windows = None
+    stem_events = {}
+    if getattr(opts, "prominence", True):
+        from . import prominence
 
-    fret_mode = getattr(opts, "fret_mode", "pitch")
-    pitch_future, f0, voiced = None, None, None
-    if fret_mode == "pitch":
-        # Computed once per song, reused across attempts — and in a thread,
-        # because the ~30s of CQT/harmonic-separation CPU work can hide
-        # entirely under the GPU's generation time.
-        from concurrent.futures import ThreadPoolExecutor
+        try:
+            windows = prominence.timeline(str(audio), tempo, duration_s, progress,
+                                          known_events=stem_events)
+        except Exception as error:  # a prior, never worth failing a chart
+            windows = None
+            progress(f"      followed instrument skipped: {type(error).__name__}: {error}")
+        if windows:
+            share = {}
+            for w in windows:
+                share[w["stem"]] = share.get(w["stem"], 0) + 1
+            mix = ", ".join(f"{(k or 'unsure')} {v / len(windows):.0%}"
+                            for k, v in sorted(share.items(), key=lambda kv: -kv[1]))
+            progress(f"      followed instrument: {prominence.letters(windows)} "
+                     f"({len(prominence.runs(windows))} run(s); {mix})")
+        else:
+            progress("      followed instrument: no timeline (model or SW stems unavailable)")
+    if not getattr(opts, "no_bass_fallback", False):
+        extra = []
+        if windows and not getattr(opts, "no_keyed_rescue", False):
+            extra, touched, counts = prominence.keyed_rescue_events(
+                events, windows, stem_events, tempo)
+            if extra:
+                detail = ", ".join(f"{k} {v}" for k, v in counts.items())
+                progress(f"      keyed rescue: {len(extra)} note(s) from the followed "
+                         f"stem in {touched} starved window(s) ({detail})")
+        # Song-level fallback: where keyed rescue found nothing anywhere
+        # (no timeline, or no followed stem playing in the starved
+        # windows), the blended stem rescue still fills starved runs.
+        # Measured on 16 songs: keyed 0.71 precision vs blended 0.70,
+        # and three songs fire only the blended one (Emmure: 225 notes).
+        if not extra and transcribe.starved_runs(events, tempo):
+            # Starved stretches first get the strong medicine: transcribe
+            # the isolated stems there (separation removes the masking
+            # that collapsed the mix transcription). Demucs results are
+            # cached, so lyrics/solos reuse this same separation later.
+            from . import stems as stemsmod
 
-        progress("      extracting pitch features (overlapped with generation)")
-        pitch_pool = ThreadPoolExecutor(max_workers=1)
-        pitch_future = pitch_pool.submit(
-            pitchmod.pitch_features, y, sr, model.config.grid_ms)
-        pitch_pool.shutdown(wait=False)
+            st = stemsmod.separate(str(audio), progress)
+            if st is not None:
+                extra = transcribe.stem_rescue_events(events, tempo, st,
+                                                      progress)
+                if extra:
+                    progress(f"      stem rescue: {len(extra)} note(s) "
+                             f"transcribed from isolated stems where the "
+                             f"mix transcription starves")
+        if not extra:
+            extra = transcribe.bass_fallback_events(events, tempo)
+            if extra:
+                progress(f"      register fallback: {len(extra)} bass "
+                         f"note(s) admitted where the melodic selection "
+                         f"starves")
+        if extra:
+            events = sorted(events + extra)
+    swing = set()
+    if getattr(opts, "swing", False):
+        # Opt-in: on real songs the detected beat grid's local phase
+        # error (±40ms) exceeds the 55ms separating the two grids, so
+        # per-onset classification misfires on straight songs (Faded
+        # measured 61 wrongly-swung beats). Until beat tracking is that
+        # precise, straight 16ths are the safe default.
+        swing = transcribe.swung_beats(events, tempo)
+        if swing:
+            progress(f"      swing: {len(swing)} beat(s) quantized to "
+                     f"the triplet grid")
+    expert = transcribe.expert_from_notes(
+        events, tempo, subdiv=opts.subdiv,
+        min_sustain_beats=getattr(opts, 'min_sustain_beats', 0.5),
+        allow_opens=getattr(opts, "opens", True),
+        swing_beats=swing,
+        ornaments=not getattr(opts, "no_ornaments", False),
+        max_chord=int(getattr(opts, "max_chord", 2)))
+    orn = sum(1 for t, _, _ in expert
+              if t % (res // 8) == 0 and t % (res // 4) != 0)
+    if orn:
+        progress(f"      {orn} 32nd grace note(s) recovered from the "
+                 f"transcription")
+    if getattr(opts, "density", "onset") == "onset":
+        before = len({t for t, _, _ in expert})
+        expert = density.gate_by_onsets(expert, y, sr, tempo)
+        after = len({t for t, _, _ in expert})
+        if before > after:
+            progress(f"      density: {before} -> {after} positions")
+    gevents = stem_events.get("guitar")  # from the timeline when it ran
+    if not getattr(opts, "no_guitar_texture", False):
+        from . import guitar as guitarmod
 
-    progress("[3/6] generating Expert onsets")
-    reverse_map = SimpleTokenizerGuitar().reverse_map
-    seed = getattr(opts, "seed", None)
-    expert, best = None, -1.0
-    best_key = (False, -1.0)
-    for attempt in range(1, opts.attempts + 1):
-        check()
-        if seed is not None:
-            # Each attempt gets its own deterministic stream; otherwise every
-            # retry would resample the identical chart it just rejected.
-            torch.manual_seed(seed + attempt - 1)
-        seqs = model.generate(str(audio), temperature=opts.temperature,
-                              top_k=opts.top_k)
-        candidate = chartio.notes_from_tokens(
-            torch.cat(seqs).flatten().cpu().tolist(),
-            model.config.grid_ms, tempo, reverse_map, subdiv=opts.subdiv,
-        )
-        if getattr(opts, "density", "onset") == "onset":
-            before = len({t for t, _, _ in candidate})
-            candidate = density.gate_by_onsets(candidate, y, sr, tempo)
-            after = len({t for t, _, _ in candidate})
-            if before > after:
-                progress(f"      density: {before} -> {after} positions "
-                         f"(dropped {before - after} without onset evidence)")
-        if fret_mode == "pitch":
-            if f0 is None:
-                _, f0, voiced = pitch_future.result()
-            raw = candidate
-            candidate = frets.reassign_frets(candidate, tempo, f0, voiced,
-                                             model.config.grid_ms)
-            # Sparse/ambient songs can have so little pitch movement that the
-            # quantile mapping collapses onto one fret — and being
-            # deterministic, retries reproduce the same collapse (playtested:
-            # a chart that was one repeated green sustain). The model's own
-            # lanes are the better chart then.
-            if (quality.variety_score(candidate) < 0.40
-                    and quality.variety_score(raw) > quality.variety_score(candidate)):
-                progress("      pitch range too narrow for fret mapping; "
-                         "using model frets for this song")
-                candidate = raw
-        # Both matter: variety alone passed a chart that just walked the
-        # fretboard, so score on the weaker of the two. That pair is a FLOOR,
-        # though — it cannot tell whether a roll caught the actual part.
-        gate = min(quality.variety_score(candidate), quality.walk_score(candidate))
-        fidelity = density.onset_fidelity(candidate, y, sr, tempo)
-        progress(f"      attempt {attempt}/{opts.attempts}: "
-                 f"{quality.describe(candidate)}  onset-F1 {fidelity:.2f}")
-        # Sampling makes this engine high-variance — playtested as "bigger
-        # wins but bigger losses". Rank rolls by how well they match the audio,
-        # preferring any roll that clears the floor over one that does not.
-        key = (gate >= opts.min_variety, fidelity)
-        if key > best_key:
-            expert, best, best_key = candidate, gate, key
-        if key[0] and fidelity >= getattr(opts, "min_fidelity", 0.60):
-            break
-    if best < opts.min_variety:
-        progress(f"      warning: best score {best:.2f} is below {opts.min_variety:.2f}; "
-                 f"chart may lean on too few frets or walk the fretboard")
+        positions = {}
+        for t, l, _ in expert:
+            positions.setdefault(t, set()).add(l)
+        share = (sum(1 for v in positions.values()
+                     if len(v - {7}) >= 2) / max(1, len(positions)))
+        # The chart-share trigger alone missed every chug song: Gnaw
+        # and Metabolic came out at 6% and 1% chords against human 59%
+        # and 52%, because a chart that starts as singles never
+        # reaches 20%. With a timeline, guitar-followed windows open
+        # the gate instead, and the pass only voices runs inside them.
+        guitar_spans = None
+        if windows:
+            guitar_spans = [(int(w["beat0"] * res), int(w["beat1"] * res))
+                            for w in windows if w.get("stem") == "guitar"]
+        guitar_led = bool(guitar_spans) and len(guitar_spans) >= 0.25 * len(windows)
+        if share >= guitarmod.TRIGGER_CHORD_SHARE or guitar_led:
+            g = guitarmod.separate_guitar(str(audio), progress)
+            gshare = guitarmod.guitar_share(g)
+            if gshare >= guitarmod.MIN_GUITAR_SHARE:
+                progress(f"      guitar stem active ({gshare:.0%}); "
+                         + ("reusing the timeline's transcription for chord texture"
+                            if gevents is not None else "transcribing it for chord texture"))
+                if gevents is None:
+                    import soundfile as sf
+                    import tempfile as tf
 
+                    with tf.NamedTemporaryFile(suffix=".wav", delete=False) as fh:
+                        gpath = fh.name
+                    try:
+                        sf.write(gpath, g, guitarmod.SW_SR)
+                        gevents = transcribe.transcribe(gpath)
+                    finally:
+                        Path(gpath).unlink(missing_ok=True)
+                voices = guitarmod.second_voices(gevents, tempo)
+                expert, added = guitarmod.chordify(
+                    expert, voices, res,
+                    allowed_spans=guitar_spans if guitar_led else None)
+                if added:
+                    progress(f"      guitar texture: {added} single(s) "
+                             f"gained the guitar's second voice (humans "
+                             f"chart 50-100% chords on strummed songs)")
+            elif g is not None:
+                progress(f"      guitar stem quiet ({gshare:.0%}); "
+                         f"chord texture unchanged")
+    if not getattr(opts, "no_triple_riffs", False):
+        ev = transcribe.triple_song_evidence(events, tempo)
+        if gevents is not None:
+            # The guitar stem hears the third voice on different strums
+            # than the mix does; pooling them is free evidence.
+            ev = transcribe.merge_triple_evidence(
+                ev, transcribe.triple_song_evidence(gevents, tempo), tempo)
+        if ev["qualifies"]:
+            expert, promoted = transcribe.promote_triple_runs(
+                expert, ev, tempo)
+            if promoted:
+                extra = ev.get("guitar_ticks", 0)
+                progress(f"      triple riffs: {promoted} chord run(s) "
+                         f"voiced as three-note (evidence share "
+                         f"{ev['share']:.0%}"
+                         + (f", +{extra} ticks from the guitar stem"
+                            if extra else "")
+                         + "; 42% of human charts are triple songs)")
+            else:
+                # A qualifying song promoting nothing must say so - the
+                # stairs no-op bug hid behind exactly this silence.
+                progress(f"      triple song (evidence {ev['share']:.0%})"
+                         f" but no chord run met the promotion grammar")
+    followed = None
+    timeline_solos = None
+    if windows:
+        from . import prominence
+
+        if True:
+            followed = prominence.runs(windows)
+            from . import stems as stemsmod
+
+            st = stemsmod.separate(str(audio), progress, backend="sw")
+            if st is not None:
+                expert, added, touched = prominence.rhythm_rescue(
+                    expert, followed, st, stemsmod.SR, tempo)
+                if added:
+                    progress(f"      rhythm rescue: {added} note(s) from synth/bass "
+                             f"onsets in {touched} starved run(s) (Basic Pitch hears "
+                             f"9-12% of a drop's notes; stem onsets 45-82%)")
+            solo_model = prominence.load_solo_model()
+            if solo_model is not None:
+                timeline_solos = prominence.solo_runs(windows, solo_model, tempo)
+                spans = ", ".join(f"{tempo.beat_to_time(a / res):.0f}-{tempo.beat_to_time(b / res):.0f}s"
+                                  for a, b in timeline_solos)
+                progress(f"      solos: {len(timeline_solos)} lead break(s) from the "
+                         f"followed-instrument timeline" + (f" ({spans})" if spans else ""))
     if not expert:
         raise ValueError(
-            "model produced no notes. temperature 0 selects greedy decoding, "
-            "which collapses to 'no note' at every step; use a positive value."
-        )
-
+            "transcription found no chartable notes — is this audio "
+            "mostly percussion or noise?")
+    best = min(quality.variety_score(expert), quality.walk_score(expert))
+    progress(f"      {quality.describe(expert)}")
+    if best < opts.min_variety:
+        progress(f"      warning: score {best:.2f} below "
+                 f"{opts.min_variety:.2f} (transcription is "
+                 f"deterministic; retries would not change it)")
     return _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
-                         engine, audio, duration_s)
+                         audio, duration_s, bp_events=events,
+                         followed=followed, timeline_solos=timeline_solos)
 
 
 def _group(notes):
@@ -436,10 +338,10 @@ def _group(notes):
 
 
 def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
-                  engine, audio, duration_s, bp_events=None, followed=None,
+                  audio, duration_s, bp_events=None, followed=None,
                   timeline_solos=None) -> dict:
-    """Everything downstream of Expert-note production, shared by engines:
-    difficulty target, reduction, expression, lyrics, art, rating, writing."""
+    """Everything downstream of Expert-note production: difficulty target,
+    reduction, expression, lyrics, art, rating, writing."""
     res = tempo.resolution
     from . import rating
 
@@ -590,12 +492,10 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
                      f"every generated note)")
 
     name = _display_name(opts, audio)
-    charted_by = ("basic-pitch" if engine == "basicpitch"
-                  else str(opts.model).split("/")[-1])
     meta = {
         "name": name, "artist": opts.artist, "album": opts.album,
         "genre": opts.genre, "year": opts.year,
-        "charter": f"chartgen ({charted_by})",
+        "charter": "chartgen (basic-pitch)",
     }
 
     events = () if opts.no_sections else expression.sections(y, sr, tempo)
@@ -637,17 +537,12 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     end_tick = int(tempo.time_to_beat(duration_s) * res)
     if opts.no_sustains:
         tiers = {n: [(t, l, 0) for t, l, _ in notes] for n, notes in tiers.items()}
-    elif engine == "basicpitch":
+    else:
         # Expert already carries REAL sustains (transcribed note durations);
-        # only propagate them down, never overwrite with the gap heuristic.
+        # only propagate them down to the reduced tiers.
         from . import transcribe
 
         tiers = transcribe.propagate_sustains(tiers)
-    else:
-        tiers = expression.add_sustains_all_tiers(
-            tiers, res, end_tick, min_gap_beats=opts.min_sustain_gap,
-            bpm=tempo.bpm,
-        )
     if not opts.no_sustains and not getattr(opts, "no_motifs", False):
         from . import motifs
         from . import transcribe as transcribemod

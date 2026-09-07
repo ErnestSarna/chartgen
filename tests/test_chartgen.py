@@ -9,14 +9,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from chartgen.chart import notes_from_tokens, write_chart  # noqa: E402
-from chartgen.expression import (  # noqa: E402
-    add_sustains,
-    add_sustains_all_tiers,
-    hopo_threshold,
-    star_power_phrases,
-)
-from chartgen.pitch import frets_from_pitch  # noqa: E402
+from chartgen.chart import write_chart  # noqa: E402
+from chartgen.expression import hopo_threshold, star_power_phrases  # noqa: E402
 from chartgen.quality import step_profile, variety_score, walk_score  # noqa: E402
 from chartgen.tempo import RESOLUTION, TempoMap  # noqa: E402
 
@@ -116,49 +110,6 @@ def test_sync_track_honours_drift_tolerance():
     assert worst <= tol + 0.001, f"tempo map desyncs by {worst * 1000:.1f}ms"
 
 
-def test_notes_from_tokens_dedupes_and_orders():
-    t = steady()
-    reverse_map = {0: (0,), 1: (1,), 5: (0, 2)}
-    # 40ms frames: two frames close enough to snap to the same 16th tick.
-    tokens = [99] * 100
-    tokens[25] = 0   # 1.00s
-    tokens[26] = 0   # 1.04s -> same 16th as above at 120bpm (125ms grid)
-    tokens[50] = 5   # 2.00s, a chord
-    notes = notes_from_tokens(tokens, 40, t, reverse_map, subdiv=4)
-
-    ticks = [n[0] for n in notes]
-    assert ticks == sorted(ticks), "notes must be tick-ordered"
-    assert len(set(ticks)) < len([25, 26, 50]) or ticks[0] != ticks[1]
-    assert (min(ticks), 0, 0) in [tuple(n) for n in notes]
-    chord = [n for n in notes if n[0] == max(ticks)]
-    assert {c[1] for c in chord} == {0, 2}, f"chord lanes lost: {chord}"
-    assert all(0 <= lane <= 7 for _, lane, _ in notes)
-
-
-def test_notes_from_tokens_does_not_alias_frames_into_chords():
-    """Four 40ms frames fit inside one 16th at 90 BPM; different-lane frames
-    landing on one tick must not stack into a fake chord. Measured on a real
-    song, unioning turned 38 model chords into 210 chart chords."""
-    t = steady(bpm=90.0)
-    reverse_map = {0: (0,), 1: (1,), 2: (2,), 5: (0, 2)}
-    tokens = [99] * 120
-    # Three different single-lane frames all inside the first 16th after beat 2.
-    beat2 = t.beat_times[2]
-    for offset, tok in ((0.000, 0), (0.040, 1), (0.080, 2)):
-        tokens[int(round((beat2 + offset) / 0.040))] = tok
-    notes = notes_from_tokens(tokens, 40, t, reverse_map, subdiv=4)
-    by_tick = {}
-    for tick, lane, _ in notes:
-        by_tick.setdefault(tick, []).append(lane)
-    assert all(len(v) == 1 for v in by_tick.values()), f"fake chord: {by_tick}"
-
-    # A genuine chord — one multi-lane frame — must still come through whole.
-    tokens = [99] * 120
-    tokens[int(round(beat2 / 0.040))] = 5
-    notes = notes_from_tokens(tokens, 40, t, reverse_map, subdiv=4)
-    assert {l for _, l, _ in notes} == {0, 2}, notes
-
-
 def test_write_chart_is_parseable_and_has_real_tempo():
     t = steady()
     text = write_chart(
@@ -223,62 +174,6 @@ def test_empty_star_power_phrases_are_dropped():
     )
     assert text.count("= S 2 ") == 2, "one phrase per tier should survive"
     assert f"{100 * RESOLUTION} = S 2" not in text
-
-
-def test_sustains_respect_note_spacing():
-    res = RESOLUTION
-    # 8th-note run, then a note with two beats of space, then a final note.
-    notes = [(0, 0, 0), (res // 2, 1, 0), (res, 2, 0), (3 * res, 3, 0)]
-    out = add_sustains(notes, res, end_tick=8 * res)
-    sus = {tick: length for tick, _, length in out}
-
-    assert sus[0] == 0, "8th-note gap must not sustain"
-    assert sus[res // 2] == 0, "8th-note gap must not sustain"
-    # Two beats of room: sustain, but released before the next note.
-    assert sus[res] > 0
-    assert res + sus[res] < 3 * res, "sustain must end before the next note"
-    assert sus[3 * res] > 0, "final note should ring out to the end"
-
-
-def test_sustains_are_capped_and_never_negative():
-    res = RESOLUTION
-    out = add_sustains([(0, 0, 0)], res, end_tick=500 * res, max_beats=4.0)
-    assert 0 < out[0][2] <= 4 * res, out
-    # A note past the supplied end tick must not produce a negative sustain.
-    out = add_sustains([(10 * res, 0, 0)], res, end_tick=res)
-    assert out[0][2] >= 0
-
-
-def test_lower_tiers_inherit_expert_sustains_not_their_own_gaps():
-    """A sparse tier must not sustain just because reduction left it a gap."""
-    res = RESOLUTION
-    # A busy 16th-note run: the music has no room to hold anything.
-    expert = [(i * (res // 4), i % 5, 0) for i in range(16)]
-    # Reduction keeps only the downbeats, leaving one-beat gaps behind.
-    easy = [n for n in expert if n[0] % res == 0]
-
-    out = add_sustains_all_tiers(
-        {"ExpertSingle": expert, "EasySingle": easy}, res, end_tick=16 * res
-    )
-    easy_sus = [s for _, _, s in out["EasySingle"][:-1]]
-    assert all(s == 0 for s in easy_sus), f"busy song over-sustained in Easy: {easy_sus}"
-
-    # Computing from Easy's own spacing is what got this wrong; prove it differs.
-    naive = add_sustains(easy, res, end_tick=16 * res)
-    assert any(s > 0 for _, _, s in naive[:-1]), "test no longer exercises the bug"
-
-
-def test_inherited_sustains_never_reach_the_next_note():
-    res = RESOLUTION
-    expert = [(0, 0, 0), (4 * res, 1, 0), (5 * res, 2, 0)]
-    easy = [(0, 0, 0), (5 * res, 2, 0)]  # middle note dropped
-    out = add_sustains_all_tiers(
-        {"ExpertSingle": expert, "EasySingle": easy}, res, end_tick=9 * res
-    )
-    for notes in out.values():
-        for (tick, _, sus), (nxt, _, _) in zip(notes, notes[1:]):
-            if nxt != tick:
-                assert tick + sus < nxt, f"sustain at {tick} runs into {nxt}"
 
 
 def test_star_power_is_bar_aligned_spaced_and_non_empty():
@@ -454,45 +349,6 @@ def test_song_ini_disables_hopos_by_default():
     assert "hopo_frequency" not in write_song_ini(meta, 1000, hopos=True)
 
 
-def test_frets_from_pitch_keeps_lowest_pitch_notes():
-    """Regression: silence and lowest-pitch must not share an encoding.
-
-    f0_norm originally used 0.0 for both "nothing sounding" and "bin 0", and bin
-    0 is the open low E — the most-played region on the instrument. Every low
-    note got filtered out as silence, collapsing the whole song onto one fret.
-    """
-    f0 = np.array([0.0, 0.8, 0.0, 0.8, 0.0, 0.8])  # alternating low / high
-    voiced = np.ones(6, dtype=bool)
-    frets = frets_from_pitch(f0, voiced, list(range(6)))
-    assert len(set(frets)) > 1, f"low notes were dropped again: {frets}"
-    assert frets[0] < frets[1], frets
-
-
-def test_frets_from_pitch_maps_equal_pitch_to_equal_fret():
-    """The property the generated charts lacked: repeats produce repeats."""
-    f0 = np.array([0.2, 0.9, 0.2, 0.5, 0.2, 0.9])
-    voiced = np.ones(6, dtype=bool)
-    frets = frets_from_pitch(f0, voiced, list(range(6)))
-    assert frets[0] == frets[2] == frets[4], frets
-    assert frets[1] == frets[5], frets
-
-
-def test_frets_from_pitch_uses_the_whole_neck():
-    rng = np.random.default_rng(3)
-    f0 = rng.random(400)
-    frets = frets_from_pitch(f0, np.ones(400, dtype=bool), list(range(400)))
-    assert set(frets) == {0, 1, 2, 3, 4}, sorted(set(frets))
-
-
-def test_frets_from_pitch_degenerate_inputs():
-    # Nothing voiced at all.
-    assert set(frets_from_pitch(np.array([0.5, 0.5]), np.zeros(2, dtype=bool), [0, 1])) == {0}
-    # One sustained pitch: no range to spread across.
-    assert set(frets_from_pitch(np.full(5, 0.4), np.ones(5, dtype=bool), list(range(5)))) == {0}
-    # Tick past the end of the feature array must clamp, not crash.
-    frets_from_pitch(np.array([0.1, 0.9]), np.ones(2, dtype=bool), [0, 1, 99])
-
-
 def _natural_hopos(notes, thr=162):
     by = {}
     for tick, lane, _ in notes:
@@ -506,56 +362,6 @@ def _natural_hopos(notes, thr=162):
 
 
 OPEN_LANE = 7
-
-
-def test_reassign_frets_makes_repeats_and_tracks_pitch():
-    """The property the raw model lacks: same pitch -> same fret, and motion
-    follows the music instead of walking the fretboard."""
-    from chartgen.frets import reassign_frets
-
-    t = steady(n=128)
-    grid_ms = 40
-    # Audio alternates a low phrase and a high phrase, 6 frames each.
-    f0 = np.tile(np.repeat([0.15, 0.85], 8), 200)[:3000]
-    voiced = np.ones(3000, dtype=bool)
-    # Model output: a staircase — the exact failure the playtest found.
-    notes = [(i * 120, i % 5, 0) for i in range(96)]
-    out = reassign_frets(notes, t, f0, voiced, grid_ms)
-
-    assert len(out) == len(notes)
-    assert [n[0] for n in out] == [n[0] for n in notes], "timing must not move"
-    from chartgen.quality import step_profile
-    p = step_profile(out)
-    assert p["repeat"] > 0.30, f"pitch plateaus must become fret repeats: {p}"
-
-
-def test_reassign_frets_preserves_chords_opens_and_silence():
-    from chartgen.frets import reassign_frets
-
-    t = steady()
-    f0 = np.full(2000, 0.5, dtype=np.float32)
-    f0[:100] = 0.1
-    voiced = np.ones(2000, dtype=bool)
-    voiced[50:60] = False  # a silent stretch
-
-    res = RESOLUTION
-    notes = [
-        (0, 1, 0), (0, 3, 0),        # chord, shape span 2
-        (res, OPEN_LANE, 0),          # open note
-        (2 * res, 4, 90),             # single with a sustain
-    ]
-    out = reassign_frets(notes, t, f0, voiced, 40)
-    chord = sorted(l for tick, l, _ in out if tick == 0)
-    assert chord[1] - chord[0] == 2, f"chord shape lost: {chord}"
-    assert (res, OPEN_LANE, 0) in out, "open notes must stay open"
-    sus = [s for tick, _, s in out if tick == 2 * res]
-    assert sus == [90], "sustains must survive reassignment"
-
-    # A note in the silent stretch keeps the model's lane: pitch is meaningless.
-    silent_tick = t.quantize(50 * 0.040)
-    silent_notes = [(silent_tick, 3, 0)]
-    kept = reassign_frets(silent_notes, t, f0, voiced, 40)
-    assert kept == silent_notes
 
 
 def test_reduce_hard_keeps_hopos_and_thins_walls():
@@ -623,46 +429,6 @@ def test_reduce_hard_respects_nps_cap_on_dense_charts():
     assert beats <= kept, "beats must never be dropped"
     # Without a BPM the cap is off and the old behaviour stands.
     assert len(reduce_hard(expert, res)) > len(hard)
-
-
-def test_reassign_frets_limits_fast_chord_jumps():
-    """Playtest: opposite-side two-note chords in quick succession are a hand
-    shift no real chart asks for. Within a beat, the anchor moves at most one
-    lane; with time to move, it may jump freely."""
-    from chartgen.frets import reassign_frets
-
-    t = steady(n=64)
-    res = RESOLUTION
-    # Pitch alternates extremes in 8-frame blocks (0.32s) — long enough to
-    # survive median smoothing, short enough that consecutive 8th-note chords
-    # see opposite extremes and raw pitch frets would slam between 0 and 4.
-    f0 = np.tile(np.repeat([0.05, 0.95], 8), 200).astype(np.float32)[:3000]
-    voiced = np.ones(3000, dtype=bool)
-    # Two-note chords every 8th: fast succession.
-    notes = []
-    for i in range(16):
-        tick = i * (res // 2)
-        notes += [(tick, 0, 0), (tick, 1, 0)]
-    out = reassign_frets(notes, t, f0, voiced, 40)
-    by_tick = {}
-    for tick, lane, _ in out:
-        by_tick.setdefault(tick, []).append(lane)
-    anchors = [min(v) for _, v in sorted(by_tick.items())]
-    jumps = [abs(b - a) for a, b in zip(anchors, anchors[1:])]
-    assert max(jumps) <= 1, f"fast chords still teleport: {anchors}"
-
-    # Chords a full bar apart may jump the neck.
-    slow = []
-    for i in range(8):
-        tick = i * 4 * res
-        slow += [(tick, 0, 0), (tick, 1, 0)]
-    out = reassign_frets(slow, t, f0, voiced, 40)
-    by_tick = {}
-    for tick, lane, _ in out:
-        by_tick.setdefault(tick, []).append(lane)
-    anchors = [min(v) for _, v in sorted(by_tick.items())]
-    assert max(abs(b - a) for a, b in zip(anchors, anchors[1:])) >= 2, \
-        "slow chords should still follow big pitch moves"
 
 
 def test_chord_rules_remove_green_orange_stretches():
@@ -893,75 +659,6 @@ def test_tempo_octave_helpers():
     assert abs(TempoMap(beat_times=doubled, pickup_beats=0).bpm - 120.0) < 0.5
     # Every original beat survives doubling: the grid only gains midpoints.
     assert all(any(abs(doubled - b) < 1e-9) for b in slow)
-
-
-def test_conditioner_is_exactly_identity_when_untrained():
-    """Zero-init is load-bearing: it lets a pretrained checkpoint keep its quality.
-
-    If this drifts to small-random init, adding the conditioner would perturb a
-    trained model on step 0 and the fine-tune would start from damage.
-    """
-    import torch
-
-    from chartgen.conditioning import PitchConditioner
-
-    cond = PitchConditioner(d_model=64)
-    assert cond.is_identity
-    bias = cond(torch.randn(3, 40, cond.proj.in_features))
-    assert bias.shape == (3, 40, 64)
-    assert torch.count_nonzero(bias) == 0, "untrained conditioner must add nothing"
-
-    torch.nn.init.normal_(cond.proj.weight, std=0.2)
-    assert not cond.is_identity
-    assert torch.count_nonzero(cond(torch.randn(3, 40, cond.proj.in_features))) > 0
-
-
-def test_pack_features_shape_and_mismatch():
-    import torch
-
-    from chartgen.conditioning import N_PITCH_FEATURES, pack_features
-
-    packed = pack_features(torch.rand(50, 48), torch.rand(50), torch.ones(50))
-    assert packed.shape == (50, N_PITCH_FEATURES)
-    try:
-        pack_features(torch.rand(50, 48), torch.rand(49), torch.ones(50))
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("mismatched frame counts must be rejected loudly")
-
-
-def test_align_frames_pads_with_edge_not_silence():
-    """Padding with zeros would read as 'nothing sounding' and fight `voiced`."""
-    import torch
-
-    from chartgen.conditioning import align_frames
-
-    x = torch.arange(12, dtype=torch.float32).reshape(1, 4, 3)
-    padded = align_frames(x, 6)
-    assert padded.shape == (1, 6, 3)
-    assert torch.equal(padded[0, 4], x[0, -1]), "should repeat the last frame"
-    assert torch.equal(padded[0, 5], x[0, -1])
-    assert align_frames(x, 2).shape == (1, 2, 3)
-    assert align_frames(x, 4) is x
-
-
-def test_windows_for_chunks_maps_sample_offsets_to_frames():
-    """Chunk offsets are sample counts; frames must line up exactly."""
-    import torch
-
-    from chartgen.conditioning import windows_for_chunks
-
-    grid_ms, sr = 40, 24000
-    frames_per_chunk = int(30 * 1000 / grid_ms)  # 750
-    pitch = torch.arange(3000, dtype=torch.float32).reshape(3000, 1)
-    starts = [0, 30 * sr, 60 * sr]
-    batch = windows_for_chunks(pitch, starts, frames_per_chunk, sr, grid_ms)
-    assert batch.shape == (3, frames_per_chunk, 1)
-    # 30s at 40ms is 750 frames, so chunk n starts at frame 750n.
-    assert batch[0, 0, 0] == 0
-    assert batch[1, 0, 0] == 750
-    assert batch[2, 0, 0] == 1500
 
 
 def test_sixteenth_grid_stays_inside_the_natural_hopo_window():

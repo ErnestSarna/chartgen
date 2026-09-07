@@ -101,7 +101,7 @@ def legato_stairs(notes, resolution: int, bpm: float | None = None):
     pos = _positions(notes)
     gap_ticks = int(STAIR_GAP_SECONDS * (bpm or 120.0) / 60.0 * resolution)
     gap_ticks = max(gap_ticks, resolution // 8)
-    # The 200ms community floor ONLY - not add_sustains' stricter
+    # The 200ms community floor ONLY - not the transcription path's stricter
     # max(res//2, 200ms). Copying that floor here was a real shipped bug:
     # at 84 BPM half a beat is 357ms, so stepped 8th phrases (the bread
     # and butter of stairs - Mary Jane's human chart holds them for ~1/3

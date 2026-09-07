@@ -7,7 +7,7 @@
   plus generated output and caches. What is left is about 1 MB.
 
   vendor/ IS included: it is gitignored, so cloning the repo elsewhere would not
-  bring it, and audio2chart has no license — keep this archive to yourself.
+  bring it.
 
 .EXAMPLE
   .\package.ps1
@@ -50,5 +50,5 @@ Write-Host "  2. double-click install.bat   (installs Python if missing, picks"
 Write-Host "                                 CUDA or CPU torch automatically)"
 Write-Host "  3. double-click chartgen.bat"
 Write-Host ""
-Write-Host "install.bat needs internet: ~3 GB of packages, plus ~1 GB of model"
+Write-Host "install.bat needs internet: ~3 GB of packages, plus ~1.5 GB of models"
 Write-Host "on the first chart. For the training stack, run install.bat -Training."

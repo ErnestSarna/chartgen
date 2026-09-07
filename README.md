@@ -2,14 +2,20 @@
 
 Generate Clone Hero charts from an audio file, at all four difficulty tiers.
 
-Status: **works end to end; the fretboard-walk problem is fixed** by assigning
-frets from the audio's pitch (`--fret-mode pitch`, the default) while keeping
-the model's timing. Measured on a real song, adjacent-step share fell 66%→21%
-and fret repeats rose 21%→45% — the profile of a real guitar part. The
-difficulty reducer is now ours: Hard keeps HOPOs (6→59 on the test song),
-Medium/Easy no longer collapse onto green. Training with pitch conditioning is
-wired end to end (`tools/finetune.py`) and runs on this machine's RTX 3060 Ti.
-Guitar (5-fret) only. Needs a playtest pass to calibrate feel.
+Status: works end to end. Expert notes come from Basic Pitch transcription
+(exact pitches, real polyphony, real note durations); a followed-instrument
+timeline over BS-RoFormer stems drives taps, solos and the rescue passes;
+texture, playability, motif and reduction stages are calibrated against an
+800-chart human library. Guitar (5-fret) only.
+
+**The neural charter (audio2chart) was removed on 2026-09-07.** A 10-song
+comparison against human charts (`out/enginecmp/report.md` when regenerated)
+found it tied on note timing, far less human-like in texture (1-5% chords vs
+24% human, 12-16 same-fret 16ths in a row vs 3), twice the wall time and
+three times the VRAM, unable to use any evidence-based feature shipped since
+August, and unlicensed. Its code lives on the `legacy-audio2chart` branch.
+The sections below headed "Historical" describe that engine and are kept as
+the record of why the pipeline looks the way it does.
 
 ## Installing on a new machine
 
@@ -121,11 +127,14 @@ vocals; they read fine in motion.
 Output is a Clone Hero song folder: `notes.chart`, `song.ini`, and playable audio.
 Drop it in your CH songs directory. Input must be at least 30 seconds.
 
-Useful flags: `--model …-S-…` for a ~9x smaller/faster checkpoint, `--subdiv 2`
-for an 8th-note grid (sparser, easier), `--subdiv 3` for triplet feel.
+Useful flags: `--subdiv 2` for an 8th-note grid (sparser, easier), `--subdiv 3`
+for triplet feel, `--no-prominence` to skip the stem timeline (faster, fewer
+features), `--no-taps` to strum everything.
 
-Timing on a CPU-only machine, 40s clip: ~95s with the default M checkpoint
-(225M params), ~20s with S. Do not pass `--temperature 0` — see known gaps.
+Timing on the RTX 3060 Ti: about 110 s for a 4-minute song, of which ~80 s is
+transcription, stem separation and the per-stem transcriptions. On a CPU-only
+machine the same song takes ~20 minutes, almost all of it BS-RoFormer
+separation.
 
 Verified against the format spec in `vendor/ChartFormats`
 ([GuitarGame_ChartFormats](https://github.com/TheNathannator/GuitarGame_ChartFormats)):
@@ -236,11 +245,12 @@ rather than at section boundaries. Open problem.
 
 ## ⚠️ Licensing — read before sharing anything
 
-**`vendor/audio2chart` has no license file.** No LICENSE, COPYING, or any
-in-code grant; the README only asks for citation. With no license, default
-copyright applies: it is fine to run locally, but you have **no right to
-redistribute it or ship a product built on it**. Before this goes beyond your
-own machine, open an issue on the repo and ask the author to add one.
+The app no longer depends on audio2chart (removed 2026-09-07; it has no
+license file and no data statement for the ~10k community charts it was
+trained on). The shipping stack is Basic Pitch (Apache-2.0), Demucs (MIT),
+bs-roformer-infer (MIT), faster-whisper (MIT). If you still have
+`vendor/audio2chart` or `runs/pitch-*` on disk from before, they are not
+needed and must not be redistributed.
 
 `vendor/EasyChartGenerator` is MIT, so that part is unencumbered.
 
@@ -251,21 +261,19 @@ this a local tool avoids hosting other people's audio — see "Why local" below.
 
 ```
 audio ─► beat/tempo detection + octave pick (librosa)
-      ─► audio2chart transformer ─► Expert onsets (timing)
-      ─► quantize onto the beat grid (nearest frame wins — no aliased chords)
-      ─► CQT pitch features ─► fret assignment (--fret-mode pitch)
+      ─► Basic Pitch transcription ─► (start, end, pitch, amplitude) events
+      ─► BS-RoFormer stems ─► followed-instrument timeline (per 4 bars)
+      ─► Expert selection: register/amplitude filters, quantize to the grid,
+         chords from real polyphony, keyed/rhythm rescue where starved
+      ─► texture, playability, motifs, riff unification, section reuse
       ─► chartgen reducer ─► Hard / Medium / Easy (HOPO-preserving)
-      ─► sustains (from Expert spacing) + star power + sections
+      ─► real sustains + star power + sections + taps + solos + lyrics
       ─► notes.chart + song.ini + audio ─► Clone Hero song folder
 ```
 
-Division of labour: the model supplies *when* notes happen (its timing is
-good: 85% onset recall), the CQT pitch features supply *which fret* (the model
-is provably pitch-blind — see the pitch-probe section). `--fret-mode model`
-gives the raw model lanes back; `--seed N` makes runs reproducible;
 `--reducer easygen` restores the vendored reducer for A/B comparison.
 
-### The bit that actually mattered
+### Historical: the bit that actually mattered with the neural charter
 
 audio2chart alone does not give you a usable multi-difficulty chart, for a
 reason that is easy to miss. It writes every chart at a hardcoded 200 BPM and
@@ -299,7 +307,7 @@ Two subtleties worth knowing, both covered by tests:
   `.chart`'s ambiguous `Offset` semantics, the lead-in gets its own tempo event
   so beat N lands exactly on tick N×resolution.
 
-## Expression: sustains, HOPOs, taps, star power
+## Expression: sustains, HOPOs, taps, star power (partly historical)
 
 None of this can come from the model. audio2chart's token vocabulary is *only*
 the set of lanes held at each 40ms frame (32 tokens). Note duration and the
@@ -366,7 +374,7 @@ chord plus a flag silently drops it. Tiers would disagree about which notes are
 HOPOs. Beyond that, forcing is a phrasing judgement, and arbitrary taps make
 charts worse rather than better.
 
-## Fret variety and the quality gate
+## Historical: fret variety and the quality gate
 
 Sampled generation makes lane choice the least stable part of the pipeline. Four
 runs at identical settings on one clip produced 84% red, an even spread, and 34%
@@ -417,7 +425,7 @@ chart false failures to 13% — the stragglers are genuinely walky synth-arp
 charts that share the staircase's shape. Real-chart landscape for reference:
 adjacency median 50%, repeats median 20%, chord share median 18%.
 
-## Playtest result: it is not fun yet
+## Historical: first playtest of the neural charter
 
 First human playthrough of a real song (3.4 min): **Expert plays as a walk along
 the fretboard** — one note at a time stepping left and right, rather than
@@ -448,7 +456,7 @@ HOPOs are disabled by default as of this finding (`hopo_frequency = 1` in
 song.ini) — with 16th-heavy output nearly every Expert note became a HOPO, which
 made the walking worse. `--hopos` re-enables them.
 
-## Experiment: the model is pitch-blind (`tools/pitch_probe.py`)
+## Historical: the neural model is pitch-blind (`tools/pitch_probe.py`, removed)
 
 Before investing in fine-tuning, this asks whether fret choice responds to pitch
 at all. It feeds the model a rising two-octave scale, its exact reverse, and
@@ -514,7 +522,7 @@ Two bugs this experiment caught, both of the silent kind:
   the previous note's ring-out, which with a 400ms decay is still the louder of
   the two. Frame alignment needs rounding and a frame of lead-in.
 
-## Pitch conditioning
+## Historical: pitch conditioning (removed)
 
 `chartgen/conditioning.py` + `chartgen/model.py`. Inference works now; training
 integration is not wired yet (see below).
@@ -620,7 +628,7 @@ projection) alongside the conditioner, not just train the projection. The additi
 zero-init design supports that — start from the pretrained weights and unfreeze
 whatever is needed — but do not expect conditioner-only training to fix frets.
 
-## Training throughput
+## Historical: training throughput
 
 Measured here (Ryzen 7 7735U, 8 torch threads, ~400 GFLOP/s FP32 achieved), one
 forward+backward+AdamW step at batch 4, seq 750:
@@ -654,7 +662,7 @@ GPU step — on-the-fly extraction would idle a 3060 Ti roughly 75% of the time,
 ~7 s per song once, 127 KB per song (float16), so a 300-song corpus is ~39 MB.
 Frame alignment is asserted against the audio length.
 
-## Training requirements (updated after the machine transfer)
+## Historical: training requirements
 
 - **This machine has an RTX 3060 Ti (8 GB, bf16).** The old laptop's "no usable
   GPU" no longer applies: torch reports `cuda: True`, and the config defaults
@@ -687,7 +695,7 @@ Frame alignment is asserted against the audio length.
 - audio2chart still has **no license**, which matters more once you are training
   a derived model rather than just running one locally.
 
-## Known gaps
+## Historical: known gaps of the neural charter
 
 - **The sustain ratio is uncalibrated.** On the synthetic fixture it is verifiably
   correct — the riff rests on 2 of every 6 eighths, and Expert sustains exactly
@@ -735,21 +743,21 @@ both the copyright exposure of hosting other people's music and any GPU bill.
 ## Layout
 
 ```
-chartgen/tempo.py   beat detection, octave pick, tempo map, time->tick quantization
-chartgen/chart.py   .chart / song.ini writers, token->note conversion (nearest-frame)
-chartgen/pitch.py   CQT pitch features + pitch->fret quantile mapping
-chartgen/frets.py   pitch-based fret reassignment (keeps timing/chords/opens)
-chartgen/reduce.py  chartgen difficulty reducer (+ vendored one for A/B)
-chartgen/quality.py variety/walk scores that gate regeneration
-chartgen/conditioning.py + model.py  pitch conditioning (inference wrapper)
-chartgen/__main__.py  CLI pipeline; chartgen/app.py  Tkinter GUI
-tests/              python tests/test_chartgen.py (or -m tests.test_chartgen)
-tools/build_dataset.py  CH songs folder -> training manifest + pitch cache
-tools/finetune.py   pitch-conditioned fine-tune on the pretrained checkpoints
-vendor/             audio2chart (no license!), EasyChartGenerator (MIT)
+chartgen/tempo.py        beat detection, octave pick, tempo map, time->tick quantization
+chartgen/transcribe.py   Basic Pitch events -> Expert notes; rescue, triples, ladders
+chartgen/prominence.py   followed-instrument timeline, keyed/rhythm rescue, solo windows
+chartgen/stems.py        BS-RoFormer / Demucs separation shared by every consumer
+chartgen/texture.py, motifs.py, structure.py, playability.py   chart-shaping passes
+chartgen/frets.py        brightness re-laning, fret-jump smoothing
+chartgen/reduce.py       chartgen difficulty reducer (+ vendored one for A/B)
+chartgen/expression.py   star power, sections, sustain top-up; taps.py, solo.py, lyrics.py
+chartgen/chart.py        .chart / song.ini writers
+chartgen/__main__.py     CLI pipeline; chartgen/app.py  Tkinter GUI; chartgen/web.py  web UI
+tests/                   python tests/test_chartgen.py (or -m tests.test_chartgen)
+tools/                   calibration studies against the human chart library
+vendor/                  EasyChartGenerator (MIT), ChartFormats (spec)
 ```
 
-Setup: `python -m venv .venv`, then install `torch torchaudio` (CPU index),
-`transformers==4.57.1 huggingface-hub==0.36.0 librosa soundfile tqdm`. Works on
-Python 3.14. The training-only deps in audio2chart's `requirements.txt`
-(lightning, hydra, wandb) are not needed for inference.
+Setup: `install.bat` (see above), or `python -m venv .venv`, install
+`torch torchaudio` from the right index, then `pip install -r requirements.txt`.
+Works on Python 3.14.

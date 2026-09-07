@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Continue"
 $PSDefaultParameterValues["Out-File:Encoding"] = "utf8"
 Set-Location "C:\Users\ernes\Desktop\chartgen-transfer"
-$env:PYTHONPATH = "vendor\audio2chart;vendor\EasyChartGenerator\EasyChartGenerator"
+$env:PYTHONPATH = "vendor\EasyChartGenerator\EasyChartGenerator"
 $env:HF_HUB_DISABLE_PROGRESS_BARS = "1"
 $py = ".\.venv\Scripts\python.exe"
 $dl = "C:\Users\ernes\Documents\Clone Hero\Songs\_downloads"

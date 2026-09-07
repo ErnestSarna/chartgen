@@ -1,11 +1,10 @@
 """Basic Pitch engine: transcribed notes -> Expert chart notes.
 
-The permissively-licensed replacement for the audio2chart model (Apache-2.0
-weights, ONNX runtime — no TensorFlow, no EnCodec). Basic Pitch gives real
-(start, end, midi_pitch, amplitude) note events, which is strictly more than
-the old model offered: pitch is exact instead of inferred from CQT argmax,
-chords are actual polyphony instead of sampling accidents, and sustains come
-from real note durations instead of the gap heuristic.
+Basic Pitch (Apache-2.0 weights, ONNX runtime) gives real (start, end,
+midi_pitch, amplitude) note events: exact pitch, actual polyphony, and
+sustains from real note durations. It replaced the audio2chart neural charter
+(retired 2026-09-07 after the engine comparison; the code lives on the
+legacy-audio2chart branch).
 
 What stands between a raw transcription and a playable chart — and what this
 module does — is selection: a full mix transcribes EVERYTHING (bass, pads,
@@ -57,8 +56,8 @@ def transcribe(audio_path: str, progress=lambda m: None):
 def _fret_map(pitches: np.ndarray, n_frets: int = 5):
     """midi pitch -> fret via quantile bins over the song's own kept pitches.
 
-    Same idea proven out in chartgen.pitch.frets_from_pitch, but on exact
-    transcribed pitches instead of CQT argmax: a repeated pitch is a repeated
+    Quantile bins over the song's own kept pitches, on exact transcribed
+    pitches: a repeated pitch is a repeated
     fret, rising lines rise, and both verse-register and solo-register songs
     use the whole neck.
     """
@@ -860,8 +859,7 @@ def extend_ladders(notes, events, tempo,
 
 
 def propagate_sustains(tiers: dict, expert_key: str = "ExpertSingle") -> dict:
-    """Copy Expert's real sustains onto reduced tiers by tick (BP engine only;
-    the audio2chart path derives sustains from gaps instead)."""
+    """Copy Expert's real sustains onto reduced tiers by tick."""
     by_tick = {}
     for tick, _, sus in tiers[expert_key]:
         by_tick[tick] = max(by_tick.get(tick, 0), sus)

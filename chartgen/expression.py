@@ -1,9 +1,8 @@
-"""Sustains, star power and section markers.
+"""Star power, section markers and the sustain top-up.
 
-None of this can come from the model. audio2chart's token vocabulary is only the
-set of lanes held at each frame (32 tokens); note duration and the is5/is6/isS
-flags are separate tuple fields that training discretization drops. So the model
-emits bare onsets, and everything expressive has to be derived here.
+Expert sustains themselves come from the transcribed note durations
+(chartgen.transcribe); this module holds the expression that is derived from
+the chart and the audio structure.
 
 Tap notes (chartgen.taps) and forced HOPO flags (chartgen.motifs) are computed
 elsewhere and applied at WRITE time, after reduction — the vendored difficulty
@@ -20,77 +19,6 @@ def hopo_threshold(resolution: int) -> int:
     one, and chords, never become natural HOPOs regardless of spacing.
     """
     return (65 * resolution) // 192
-
-
-def add_sustains(
-    notes: list[tuple[int, int, int]],
-    resolution: int,
-    end_tick: int,
-    min_gap_beats: float = 1.0,
-    release_beats: float = 0.25,
-    max_beats: float = 4.0,
-    bpm: float | None = None,
-) -> list[tuple[int, int, int]]:
-    """Sustain a note when the next one is far enough away to hold through.
-
-    Purely gap-based. An envelope test on the mixed audio was the obvious
-    alternative and is worse than useless: drums, bass and vocals hold the RMS up
-    whether or not the guitar is still ringing, so it would sustain everything.
-
-    ponytail: needs an isolated guitar stem (Demucs) to actually know a note is
-    held. Until then, note spacing is the honest signal.
-    """
-    min_gap = min_gap_beats * resolution
-    release = int(release_beats * resolution)
-    cap = int(max_beats * resolution)
-    # Anything shorter reads as a tap rather than a sustain. An eighth note
-    # covers that at moderate tempos, but it is only 150ms at 200 BPM — under
-    # the 200ms the charting standard targets, and near the 100ms where the
-    # Chorus Encore scanner flags a "baby sustain". Take the stricter floor.
-    floor = resolution // 2
-    if bpm:
-        floor = max(floor, int(0.200 * bpm * resolution / 60.0))
-
-    ticks = sorted({t for t, _, _ in notes})
-    next_tick = dict(zip(ticks, ticks[1:]))
-
-    out = []
-    for tick, lane, _ in notes:
-        gap = next_tick.get(tick, end_tick) - tick
-        length = 0
-        if gap >= min_gap:
-            length = min(gap - release, cap)
-            if length < floor:
-                length = 0
-        out.append((tick, lane, int(max(0, length))))
-    return out
-
-
-def add_sustains_all_tiers(
-    tiers: dict[str, list[tuple[int, int, int]]],
-    resolution: int,
-    end_tick: int,
-    expert_tier: str = "ExpertSingle",
-    **kwargs,
-) -> dict[str, list[tuple[int, int, int]]]:
-    """Sustain from Expert spacing, then propagate the same lengths downward.
-
-    Expert spacing is the best proxy available for what the music is doing. If
-    the song is playing 16ths, Expert has no room to sustain and neither should
-    the lower tiers, even though reduction left them wide gaps to fill.
-
-    Deriving each tier from its own spacing was the first attempt and it read
-    badly: it made 39 of Easy's 40 notes sustains, turning a busy song into a
-    slow one. Propagating is also always safe, because a reduced tier is a subset
-    of Expert's ticks, so an inherited sustain can never reach its next note.
-    """
-    expert = add_sustains(tiers[expert_tier], resolution, end_tick, **kwargs)
-    by_tick = {tick: length for tick, _, length in expert}
-    return {
-        name: expert if name == expert_tier
-        else [(tick, lane, by_tick.get(tick, 0)) for tick, lane, _ in notes]
-        for name, notes in tiers.items()
-    }
 
 
 def star_power_phrases(

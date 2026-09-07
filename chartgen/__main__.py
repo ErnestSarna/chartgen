@@ -1,7 +1,8 @@
 """audio file -> Clone Hero song folder with all four difficulty tiers.
 
-Pipeline: detect beat grid -> audio2chart generates Expert onsets -> quantize onto
-the grid -> derive Hard/Medium/Easy -> add sustains, star power and sections ->
+Pipeline: detect beat grid -> Basic Pitch transcribes the notes -> select and
+quantize Expert onto the grid (followed-instrument timeline, rescue, texture)
+-> derive Hard/Medium/Easy -> sustains, star power, sections, lyrics ->
 write notes.chart + song.ini + playable audio.
 
 For the GUI, run `python -m chartgen.app`.
@@ -22,36 +23,8 @@ def build_args(argv):
                          "With several inputs, artist/title come from tags or "
                          "video titles per song")
     ap.add_argument("-o", "--outdir", type=Path, default=Path("out"))
-    ap.add_argument("--engine", choices=("basicpitch", "audio2chart"),
-                    default="basicpitch",
-                    help="Expert-note source. basicpitch (default): Apache-"
-                         "licensed transcription — deterministic and "
-                         "consistent. audio2chart: the neural charter, which "
-                         "samples, so it lands bigger wins AND bigger losses; "
-                         "--attempts rolls it several times and keeps the roll "
-                         "that best matches the audio")
-    ap.add_argument("--min-fidelity", type=float, default=0.60, metavar="F1",
-                    help="stop rolling the neural engine once a roll matches "
-                         "the audio this well (human charts median 0.57)")
-    ap.add_argument("--model", default="3podi/charter-v1.0-40-M-best-acc",
-                    help="audio2chart checkpoint: hub repo id or a local "
-                         "export folder from tools/finetune.py "
-                         "(…-S-… is ~9x smaller/faster)")
-    ap.add_argument("--conditioner", default=None, metavar="PATH",
-                    help="trained PitchConditioner weights (conditioner.pt "
-                         "from tools/finetune.py); makes the model itself "
-                         "pitch-aware during generation")
     ap.add_argument("--subdiv", type=int, default=4,
                     help="quantize grid: 4 = 16th notes, 2 = 8ths, 3 = triplet 8ths")
-    ap.add_argument("--temperature", type=float, default=0.5)
-    ap.add_argument("--top_k", type=int, default=32)
-    ap.add_argument("--fret-mode", choices=("pitch", "model"), default="pitch",
-                    help="pitch: keep the model's timing but assign frets from "
-                         "the audio's pitch (repeats repeat, rising lines rise). "
-                         "model: raw model lanes, which are pitch-blind")
-    ap.add_argument("--seed", type=int, default=None,
-                    help="seed sampling so runs are reproducible; each retry "
-                         "attempt advances the seed by one")
     ap.add_argument("--target-diff", type=int, choices=range(0, 7), default=None,
                     metavar="0-6",
                     help="thin the chart until its predicted tier drops to "
@@ -64,12 +37,10 @@ def build_args(argv):
                          "(human charts almost never jump 3+); 4 disables")
     ap.add_argument("--min-sustain-beats", type=float, default=0.5,
                     metavar="BEATS",
-                    help="transcribed note length needed to become a sustain "
-                         "on the basicpitch engine")
+                    help="transcribed note length needed to become a sustain")
     ap.add_argument("--density", choices=("onset", "model"), default="onset",
-                    help="onset: drop notes lacking onset evidence in the "
-                         "audio (the model over-generates ~1.4-2x vs human "
-                         "charts). model: keep every generated note")
+                    help="onset: drop transcribed positions lacking onset "
+                         "evidence in the audio. model: keep every position")
     ap.add_argument("--bpm-mult", choices=("auto", "0.5", "1", "2"), default="auto",
                     help="tempo octave: auto picks the conventional 70-165 BPM "
                          "range (the label decides HOPO vs strum feel); 1 keeps "
@@ -78,14 +49,9 @@ def build_args(argv):
                     help="chartgen: HOPO-preserving reduction with order-"
                          "preserving lane remaps. easygen: the vendored "
                          "reducer, kept for comparison")
-    ap.add_argument("--attempts", type=int, default=3, metavar="N",
-                    help="regenerate up to N times if quality is poor; stops as "
-                         "soon as a candidate passes, so a good first roll is free")
     ap.add_argument("--min-variety", type=float, default=0.80, metavar="SCORE",
-                    help="0-1 quality bar a chart must clear (see quality.py)")
-    ap.add_argument("--min-sustain-gap", type=float, default=0.75, metavar="BEATS",
-                    help="beats of space before a note sustains; raise for fewer "
-                         "sustains (needs playtesting to calibrate)")
+                    help="0-1 quality score below which a warning is logged "
+                         "(see quality.py)")
     ap.add_argument("--cookies-from", default=None, metavar="BROWSER",
                     help="read YouTube cookies from this browser (firefox/"
                          "chrome/edge/…) so downloads carry your session — "
@@ -142,7 +108,7 @@ def build_args(argv):
                          "forcing, and machine-gun/stray-push consolidation")
     ap.add_argument("--swing", action="store_true",
                     help="quantize beats whose onsets fit the triplet grid to "
-                         "24ths (shuffle feel; Basic Pitch engine only). "
+                         "24ths (shuffle feel). "
                          "Off by default: measured on real songs, beat-grid "
                          "phase error exceeds the 16th/triplet slot distance, "
                          "so detection misfires on straight songs")
@@ -183,7 +149,7 @@ def build_args(argv):
     ap.add_argument("--no-ornaments", action="store_true",
                     help="skip recovering 32nd grace notes the 16th grid "
                          "swallowed (tightly gated: max one per bar, twelve "
-                         "per song; Basic Pitch engine only)")
+                         "per song)")
     ap.add_argument("--no-star-power", action="store_true")
     ap.add_argument("--no-sections", action="store_true")
     ap.add_argument("--no-sustains", action="store_true")

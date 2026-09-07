@@ -30,7 +30,7 @@ from pathlib import Path
 from flask import Flask, Response, abort, jsonify, request, send_file
 
 from . import pipeline, youtube
-from .app import GRIDS, MODELS, load_settings  # reuse the desktop defaults
+from .app import GRIDS, load_settings  # reuse the desktop defaults
 
 app = Flask("chartgen")
 
@@ -54,16 +54,14 @@ def base_opts() -> Namespace:
     saved = load_settings()
     return Namespace(
         audio=None, outdir=outdir(),
-        model=MODELS.get(saved.get("model"), list(MODELS.values())[0]),
         subdiv=GRIDS.get(saved.get("grid"), 4),
-        temperature=0.5, top_k=32, attempts=int(saved.get("attempts", 3)),
-        min_variety=0.80, min_sustain_gap=float(saved.get("sustain_gap", 1.0)),
+        min_variety=0.80,
         hopos=bool(saved.get("hopos", True)),
         no_star_power=not saved.get("star_power", True),
         no_sections=not saved.get("sections", True),
         no_sustains=not saved.get("sustains", True),
         lyrics=bool(saved.get("lyrics", True)),
-        fret_mode="pitch", target_diff=None, skip_existing=True,
+        target_diff=None, skip_existing=True,
         name=None, artist="Unknown", album="", genre="", year="",
     )
 

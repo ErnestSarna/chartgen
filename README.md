@@ -131,10 +131,19 @@ Useful flags: `--subdiv 2` for an 8th-note grid (sparser, easier), `--subdiv 3`
 for triplet feel, `--no-prominence` to skip the stem timeline (faster, fewer
 features), `--no-taps` to strum everything.
 
-Timing on the RTX 3060 Ti: about 110 s for a 4-minute song, of which ~80 s is
-transcription, stem separation and the per-stem transcriptions. On a CPU-only
-machine the same song takes ~20 minutes, almost all of it BS-RoFormer
-separation.
+Timing on the RTX 3060 Ti: about 85 s for a 4-minute song (the first song
+of a session also loads the separator), and about 30 s when the song has
+been charted before. The stem separator stays resident in the process, the
+CPU-only analyses (mix transcription, sections, riff profiles, solo pitch
+analysis, the lyrics lookup) run on threads while the GPU separates, and
+separated stems plus Basic Pitch transcriptions are cached under
+`%APPDATA%\chartgen\cache` (override with `CHARTGEN_CACHE_DIR`; stems are
+kept as exact float32, ~230 MB per song, least-recently-used eviction at
+`CHARTGEN_STEM_CACHE_GB`, default 6; `CHARTGEN_STEM_CACHE=0` disables it).
+None of this changes a chart: the eight comparison songs come out
+byte-identical with everything on, cold and cached. On a CPU-only machine the
+same song still takes ~20 minutes the first time, almost all of it
+BS-RoFormer separation.
 
 Verified against the format spec in `vendor/ChartFormats`
 ([GuitarGame_ChartFormats](https://github.com/TheNathannator/GuitarGame_ChartFormats)):

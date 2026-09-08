@@ -126,14 +126,20 @@ def transcribe_stems(mono, sr, progress=lambda m: None, known=None):
     from . import transcribe
 
     out = dict(known or {})
+    stem_key = mono.get("_key")
     for name in STEMS:
         if name in out:
+            continue
+        key = f"{stem_key}:{name}:bp" if stem_key else None
+        cached = transcribe.cached_transcription(key) if key else None
+        if cached is not None:
+            out[name] = cached
             continue
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as fh:
             path = fh.name
         try:
             sf.write(path, mono[name], sr)
-            out[name] = transcribe.transcribe(path)
+            out[name] = transcribe.transcribe(path, cache_key=key)
         finally:
             Path(path).unlink(missing_ok=True)
     return out

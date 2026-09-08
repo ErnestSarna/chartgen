@@ -111,14 +111,16 @@ def _section_spans(section_marks, last_tick, resolution):
     return list(zip(bounds, bounds[1:]))
 
 
-def section_evidence(y, sr, tempo, spans, resolution):
+def section_evidence(y, sr, tempo, spans, resolution, analysis=None):
     """[(dict | None)] of lead-voice evidence per section, plus novelty.
 
     Split out from detect() so the threshold sweep in tools/ can cache these
     once per song — the audio analysis costs ~30s and the thresholds needed
-    dozens of passes over the same songs to settle.
+    dozens of passes over the same songs to settle. `analysis` is the
+    output of analyze(y, sr) when the caller computed it earlier (the
+    pipeline runs it on a CPU thread while the GPU separates stems).
     """
-    rows = _features(y, sr, tempo, spans, resolution)
+    rows = _features(y, sr, tempo, spans, resolution, analysis)
     for row, fresh in zip(rows, _novelty(rows)):
         if row is not None:
             row["novelty"] = fresh
@@ -126,8 +128,12 @@ def section_evidence(y, sr, tempo, spans, resolution):
     return rows
 
 
-def _features(y, sr, tempo, spans, resolution):
-    """Per-section lead-voice evidence, computed once over the whole song."""
+def analyze(y, sr) -> dict:
+    """The song-wide, chart-independent half of the solo evidence: pitch
+    track, centroid and chroma of the harmonic part, with their time axes.
+    ~30 s of CPU on a 4-minute song; nothing here depends on the chart,
+    the sections or the tempo map, so it can run while the GPU separates.
+    """
     import librosa
 
     # Percussive energy carries no melody; the lead line lives in the
@@ -149,6 +155,17 @@ def _features(y, sr, tempo, spans, resolution):
     centroid_times = librosa.times_like(centroid, sr=sr)
     chroma = librosa.feature.chroma_cqt(y=harmonic, sr=sr)
     chroma_times = librosa.times_like(chroma, sr=sr, hop_length=512)
+    return {"f0": f0, "voiced_prob": voiced_prob, "times": times,
+            "centroid": centroid, "centroid_times": centroid_times,
+            "chroma": chroma, "chroma_times": chroma_times}
+
+
+def _features(y, sr, tempo, spans, resolution, analysis=None):
+    """Per-section lead-voice evidence, computed once over the whole song."""
+    a = analysis if analysis is not None else analyze(y, sr)
+    f0, voiced_prob, times = a["f0"], a["voiced_prob"], a["times"]
+    centroid, centroid_times = a["centroid"], a["centroid_times"]
+    chroma, chroma_times = a["chroma"], a["chroma_times"]
 
     rows = []
     for start, end in spans:
@@ -287,7 +304,8 @@ def _guitar_evidence(audio_path, progress):
 
 
 def detect(expert, section_marks, lyric_events, y, sr, tempo,
-           progress=lambda m: None, audio_path=None) -> list[tuple[int, int]]:
+           progress=lambda m: None, audio_path=None,
+           analysis=None) -> list[tuple[int, int]]:
     """[(start_tick, end_tick)] where the audio carries a lead break.
 
     Returns nothing far more often than not, on purpose: 70% of human charts
@@ -303,7 +321,7 @@ def detect(expert, section_marks, lyric_events, y, sr, tempo,
     last = ticks[-1]
     spans = _section_spans(section_marks, last, resolution)
     try:
-        rows = _zscores(section_evidence(y, sr, tempo, spans, resolution))
+        rows = _zscores(section_evidence(y, sr, tempo, spans, resolution, analysis))
     except Exception as error:  # a solo marker is never worth failing a chart
         progress(f"      solo detection skipped: {type(error).__name__}: {error}")
         return []

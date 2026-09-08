@@ -23,6 +23,41 @@ class Cancelled(Exception):
     """Raised when the caller asked to stop between stages."""
 
 
+class _Prefetch:
+    """Chart-independent analyses started on CPU threads as soon as the
+    tempo map exists, while the GPU separates stems.
+
+    Every job is a pure function of (audio, tempo) that the pipeline used
+    to compute later, in sequence, on an idle CPU: the mix transcription,
+    the section segmentation and its chroma signatures, the per-bar riff
+    profiles, the solo detector's pitch/chroma analysis, and the LRCLIB
+    lookup. Each result is consumed at exactly the point the inline call
+    used to happen, and a job's exception surfaces there too, so the chart
+    - and every failure message - is the same as before. onnxruntime and
+    librosa's numba kernels release the GIL for their heavy work, which is
+    what makes the overlap real.
+    """
+
+    def __init__(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.pool = ThreadPoolExecutor(max_workers=4,
+                                       thread_name_prefix="chartgen-prefetch")
+        self.jobs = {}
+
+    def submit(self, name, fn, *args, **kwargs):
+        self.jobs[name] = self.pool.submit(fn, *args, **kwargs)
+
+    def has(self, name) -> bool:
+        return name in self.jobs
+
+    def result(self, name):
+        return self.jobs[name].result()
+
+    def close(self):
+        self.pool.shutdown(wait=False)
+
+
 def _folder_name(artist: str, name: str) -> str:
     """Song folder name: Windows-illegal characters stripped, never empty."""
     import re
@@ -127,7 +162,49 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
     from . import transcribe
 
     progress("[2/6] transcribing (Basic Pitch engine)")
-    events = transcribe.transcribe(str(audio), progress)
+    from . import cache as diskcache
+
+    try:
+        mix_key = f"mix:{diskcache.audio_key(str(audio))}:bp"
+    except OSError:
+        mix_key = None
+    # Everything below the transcription that needs only the audio and the
+    # tempo map starts now, on threads, so it overlaps the GPU separation
+    # instead of running afterwards on an idle CPU. Results are collected
+    # exactly where the sequential code used them.
+    pre = _Prefetch()
+    pre.submit("transcribe", transcribe.transcribe, str(audio), progress,
+               cache_key=mix_key)
+    if not getattr(opts, "no_solos", False):
+        from . import solo as solomod
+
+        pre.submit("solo_analysis", solomod.analyze, y, sr)
+    if not opts.no_sections:
+        from . import structure
+
+        def _structure():
+            marks = expression.sections(y, sr, tempo)
+            signatures = None
+            if marks and not getattr(opts, "no_section_reuse", False):
+                signatures = structure.section_signatures(
+                    y, sr, tempo, [tick for tick, _ in marks])
+            return marks, signatures
+
+        pre.submit("structure", _structure)
+    if not getattr(opts, "no_riff_unify", False):
+        from . import structure
+
+        # Profiles are per bar and independent of one another, so computing
+        # them out to the end of the audio and slicing to the chart's bar
+        # count later gives the same list bar_profiles(n_bars) would.
+        audio_bars = int(tempo.time_to_beat(duration_s) // 4) + 2
+        pre.submit("profiles", structure.bar_profiles, y, sr, tempo, audio_bars)
+    if (getattr(opts, "lyrics", True)
+            and getattr(opts, "lyric_source", "auto") in ("auto", "online")):
+        from . import lrclib
+
+        pre.submit("lyrics_lookup", lrclib.find, opts.artist,
+                   opts.name or audio.stem, duration_s, progress=progress)
     check()
     progress("[3/6] building Expert from transcription")
     # The followed-instrument timeline comes first now: its per-stem
@@ -154,6 +231,8 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                      f"({len(prominence.runs(windows))} run(s); {mix})")
         else:
             progress("      followed instrument: no timeline (model or SW stems unavailable)")
+    events = pre.result("transcribe")
+    check()
     if not getattr(opts, "no_bass_fallback", False):
         extra = []
         if windows and not getattr(opts, "no_keyed_rescue", False):
@@ -254,7 +333,11 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                         gpath = fh.name
                     try:
                         sf.write(gpath, g, guitarmod.SW_SR)
-                        gevents = transcribe.transcribe(gpath)
+                        gkey = None
+                        gst = stemsmod_key(str(audio))
+                        if gst:
+                            gkey = f"{gst}:guitar:bp"
+                        gevents = transcribe.transcribe(gpath, cache_key=gkey)
                     finally:
                         Path(gpath).unlink(missing_ok=True)
                 voices = guitarmod.second_voices(gevents, tempo)
@@ -327,7 +410,17 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                  f"deterministic; retries would not change it)")
     return _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
                          audio, duration_s, bp_events=events,
-                         followed=followed, timeline_solos=timeline_solos)
+                         followed=followed, timeline_solos=timeline_solos,
+                         prefetch=pre)
+
+
+def stemsmod_key(audio_path: str):
+    """The disk-cache key of the SW stems already separated for this song,
+    if that separation happened in this process."""
+    from . import stems as stemsmod
+
+    mono = stemsmod._CACHE.get((audio_path, "sw"))
+    return mono.get("_key") if mono else None
 
 
 def _group(notes):
@@ -339,7 +432,7 @@ def _group(notes):
 
 def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
                   audio, duration_s, bp_events=None, followed=None,
-                  timeline_solos=None) -> dict:
+                  timeline_solos=None, prefetch=None) -> dict:
     """Everything downstream of Expert-note production: difficulty target,
     reduction, expression, lyrics, art, rating, writing."""
     res = tempo.resolution
@@ -498,13 +591,18 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         "charter": "chartgen (basic-pitch)",
     }
 
-    events = () if opts.no_sections else expression.sections(y, sr, tempo)
+    signatures = None
+    if prefetch is not None and prefetch.has("structure"):
+        events, signatures = prefetch.result("structure")
+    else:
+        events = () if opts.no_sections else expression.sections(y, sr, tempo)
     if events and not getattr(opts, "no_section_reuse", False):
         from . import structure
 
         ticks = [tick for tick, _ in events]
         lengths = [b - a for a, b in zip(ticks, ticks[1:])] + [0]
-        signatures = structure.section_signatures(y, sr, tempo, ticks)
+        if signatures is None:
+            signatures = structure.section_signatures(y, sr, tempo, ticks)
         repeats = structure.find_repeats(signatures, lengths)
         if repeats:
             expert = structure.reuse_patterns(expert, ticks, repeats)
@@ -515,7 +613,13 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         from . import structure
 
         n_bars = max((t for t, _, _ in expert), default=0) // (4 * res) + 1
-        profiles = structure.bar_profiles(y, sr, tempo, n_bars)
+        profiles = None
+        if prefetch is not None and prefetch.has("profiles"):
+            ahead = prefetch.result("profiles")
+            if len(ahead) >= n_bars:
+                profiles = ahead[:n_bars]
+        if profiles is None:
+            profiles = structure.bar_profiles(y, sr, tempo, n_bars)
         expert, stamped = structure.unify_riff_bars(expert, profiles, res)
         if stamped:
             progress(f"      riffs: {stamped} bar(s) unified onto their "
@@ -579,12 +683,16 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
         try:
             from . import lyrics as lyricsmod
 
+            lookup = None
+            if prefetch is not None and prefetch.has("lyrics_lookup"):
+                lookup = lambda: prefetch.result("lyrics_lookup")  # noqa: E731
             lyric_events = lyricsmod.collect(
                 str(audio), tempo, opts.artist,
                 # The [chartgen] tag is ours; a lyrics database has never
                 # heard of it.
                 opts.name or audio.stem, duration_s,
-                getattr(opts, "lyric_source", "auto"), progress, y, sr)
+                getattr(opts, "lyric_source", "auto"), progress, y, sr,
+                lookup=lookup)
         except Exception as error:  # lyrics are a nice-to-have, never fatal
             progress(f"      lyrics skipped: {type(error).__name__}: {error}")
     tap_ticks = set()
@@ -620,9 +728,15 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
     if not getattr(opts, "no_solos", False):
         from . import solo as solomod
 
+        analysis = None
+        if prefetch is not None and prefetch.has("solo_analysis"):
+            try:
+                analysis = prefetch.result("solo_analysis")
+            except Exception:
+                analysis = None  # detect() recomputes and reports as before
         solo_phrases = solomod.detect(expert, list(events), list(lyric_events),
                                       y, sr, tempo, progress,
-                                      audio_path=str(audio))
+                                      audio_path=str(audio), analysis=analysis)
         if timeline_solos:
             # UNION with the timeline detector (86%p/18%r/2.1% quiet on the
             # 299-song dump): the two miss different solos - the section
@@ -698,6 +812,8 @@ def _finish_chart(opts, progress, check, y, sr, tempo, expert, best,
             "variety": quality.variety_score(tiers[tier], tier_lanes.get(tier, 5)),
             "walk": quality.walk_score(tiers[tier]),
         }
+    if prefetch is not None:
+        prefetch.close()
     progress(f"done -> {song_dir}")
     return {
         "song_dir": song_dir, "summary": summary, "bpm": tempo.bpm,

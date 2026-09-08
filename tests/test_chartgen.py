@@ -1483,6 +1483,76 @@ def test_chordify_respects_allowed_spans():
     assert added_all > added
 
 
+
+def test_disk_cache_round_trips_exactly():
+    """Cached stems and transcriptions must come back bit-identical: the
+    cache exists to skip recomputation, never to change a chart. Stems stay
+    float32 (a float16 or FLAC copy would quantise), transcriptions ride
+    json's exact float repr."""
+    import os
+    import tempfile
+
+    from chartgen import cache
+
+    with tempfile.TemporaryDirectory() as tmp:
+        old = os.environ.get("CHARTGEN_CACHE_DIR")
+        os.environ["CHARTGEN_CACHE_DIR"] = tmp
+        try:
+            rng = np.random.default_rng(3)
+            raw = {name: rng.standard_normal(4410).astype(np.float32) * 0.3
+                   for name in ("drums", "bass", "other", "vocals", "guitar", "piano")}
+            cache.save_stems("sw:test:abc", raw)
+            back = cache.load_stems("sw:test:abc")
+            assert back is not None and set(back) == set(raw)
+            for name in raw:
+                assert back[name].dtype == np.float32
+                assert np.array_equal(back[name], raw[name])
+            assert cache.load_stems("sw:test:missing") is None
+
+            events = [(0.123456789012, 0.98765432101, 64, 0.5000000001),
+                      (1.0 / 3.0, 2.0 / 7.0, 40, 0.1234567890123)]
+            cache.save_transcription("mix:abc:bp", events)
+            assert cache.load_transcription("mix:abc:bp") == events
+            assert cache.load_transcription("mix:zzz:bp") is None
+
+            # the size cap evicts the least recently used entry, never the
+            # one just written
+            os.environ["CHARTGEN_STEM_CACHE_GB"] = str(120_000 / 2**30)
+            cache.save_stems("sw:test:second", raw)
+            assert cache.load_stems("sw:test:second") is not None
+            assert cache.load_stems("sw:test:abc") is None
+        finally:
+            os.environ.pop("CHARTGEN_STEM_CACHE_GB", None)
+            if old is None:
+                os.environ.pop("CHARTGEN_CACHE_DIR", None)
+            else:
+                os.environ["CHARTGEN_CACHE_DIR"] = old
+
+
+def test_solo_evidence_is_the_same_with_prefetched_analysis():
+    """section_evidence(analysis=analyze(y, sr)) must equal the inline
+    computation: the pipeline runs analyze() on a thread while the GPU
+    separates, and the chart must not know the difference."""
+    from chartgen import solo
+
+    sr = 22050
+    rng = np.random.default_rng(7)
+    t = np.arange(sr * 12) / sr
+    y = (0.3 * np.sin(2 * np.pi * 330 * t) * (t < 6)
+         + 0.3 * np.sin(2 * np.pi * 660 * t) * (t >= 6)
+         + 0.02 * rng.standard_normal(len(t))).astype(np.float32)
+    tm = steady(bpm=120.0, n=32, first=0.0)
+    res = tm.resolution
+    spans = [(0, 8 * res), (8 * res, 16 * res), (16 * res, 24 * res)]
+    inline = solo.section_evidence(y, sr, tm, spans, res)
+    ahead = solo.section_evidence(y, sr, tm, spans, res, analysis=solo.analyze(y, sr))
+    assert len(inline) == len(ahead)
+    for a, b in zip(inline, ahead):
+        assert (a is None) == (b is None)
+        if a is not None:
+            assert a == b, (a, b)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

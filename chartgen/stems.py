@@ -60,6 +60,89 @@ DEMUCS_STEMS = ("drums", "bass", "other", "vocals")
 SW_EXTRA = ("guitar", "piano")
 # Set CHARTGEN_STEMS=demucs|sw to pin a backend (the A/B harness uses this).
 BACKEND_ENV = "CHARTGEN_STEMS"
+SW_MODEL = "roformer-model-bs-roformer-sw-by-jarredou"
+_SW = None  # (model, config, device) once loaded in-process
+
+
+def _sw_model():
+    """The SW separator, loaded once per process and kept resident.
+
+    Mirrors the CLI's construction exactly (same config loader, same
+    checkpoint, cudnn.benchmark on, eval) so the in-process path produces
+    the stems the subprocess produced - verified bit-identical on a 30 s
+    clip and a full song when this landed. Loading once saves the ~19 s
+    per song the subprocess spent on interpreter start, torch import, CUDA
+    init and re-reading the 700 MB checkpoint.
+    """
+    global _SW
+    if _SW is not None:
+        return _SW
+    import contextlib
+    import io
+
+    import torch
+    import yaml
+    from bs_roformer import ensure_model_assets, get_model_from_config
+    from bs_roformer.inference import SafeLoaderWithTuple
+    from ml_collections import ConfigDict
+
+    # The package prints download/progress text to stdout, which is None
+    # under pythonw; keep it quiet and safe.
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        model_path, config_path = ensure_model_assets(SW_MODEL)
+        with open(config_path) as fh:
+            config = ConfigDict(yaml.load(fh, Loader=SafeLoaderWithTuple))
+        model = get_model_from_config("bs_roformer", config)
+        model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
+    _SW = (model, config, device)
+    return _SW
+
+
+def _separate_sw_inprocess(y, progress) -> dict | None:
+    """Six raw SW stems from a (2, n) float32 mix at SR, via the resident
+    model. Returns {stem: mono float32} or None when the model cannot load
+    (the caller then falls back to the CLI subprocess).
+
+    The input goes through an in-memory 16-bit WAV exactly as the file
+    the CLI used to read (PCM_16 write, float64 read), and the outputs are
+    averaged to mono from the same float32 arrays the CLI wrote to disk,
+    so nothing about the numbers changes - only where they travel.
+    """
+    import contextlib
+    import io
+
+    import soundfile as sf
+    import torch
+    from bs_roformer import demix_track
+
+    try:
+        model, config, device = _sw_model()
+    except Exception as error:
+        progress(f"      SW in-process load failed ({type(error).__name__}: "
+                 f"{str(error)[:60]}); using the CLI")
+        return None
+    buf = io.BytesIO()
+    sf.write(buf, y.T, SR, format="WAV")
+    buf.seek(0)
+    mix, _ = sf.read(buf)
+    mixture = torch.tensor(mix.T, dtype=torch.float32)
+    progress("      separating stems (BS-RoFormer SW)")
+    # The CLI ran with cudnn.benchmark on; keep that for the separation
+    # itself but restore the process-wide setting afterwards. Left on, it
+    # changed the algorithm choice of the lyric aligner's convolutions
+    # (torchaudio MMS on CUDA) and moved a word boundary by ~0.1 s - the
+    # one output difference the in-process path produced.
+    benchmark_before = torch.backends.cudnn.benchmark
+    torch.backends.cudnn.benchmark = True
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            res, _ = demix_track(config, model, mixture, device)
+    finally:
+        torch.backends.cudnn.benchmark = benchmark_before
+    return {name: res[name].T.mean(axis=1) for name in DEMUCS_STEMS + SW_EXTRA}
 
 
 def _demucs():
@@ -92,14 +175,43 @@ def _separate_sw(audio_path: str, progress) -> dict | None:
         import librosa
         import soundfile as sf
 
+        y, _ = librosa.load(str(audio_path), sr=SR, mono=False)
+        if y.ndim == 1:
+            y = np.stack([y, y])
+        raw = _separate_sw_inprocess(y, progress)
+    except Exception as error:
+        progress(f"      SW in-process separation unavailable "
+                 f"({type(error).__name__}: {error})")
+        raw = None
+    if raw is None:
+        raw = _separate_sw_cli(y, progress)
+    if raw is None:
+        return None
+    return _shim(raw)
+
+
+def _shim(raw: dict) -> dict:
+    n = min(len(v) for v in raw.values())
+    out = {name: raw[name][:n] for name in DEMUCS_STEMS}
+    # Demucs-equivalent residual: guitar and piano belong in "other" for
+    # every consumer calibrated before SW existed.
+    out["other"] = raw["other"][:n] + raw["guitar"][:n] + raw["piano"][:n]
+    out["guitar"] = raw["guitar"][:n]
+    out["piano"] = raw["piano"][:n]
+    out["sw_other"] = raw["other"][:n]  # the narrow residual, for new work
+    return out
+
+
+def _separate_sw_cli(y, progress) -> dict | None:
+    """The original subprocess path, kept as the fallback."""
+    try:
+        import soundfile as sf
+
         with tempfile.TemporaryDirectory(prefix="chartgen_sw_") as tmp:
             tmp = Path(tmp)
             (tmp / "in").mkdir()
-            y, _ = librosa.load(str(audio_path), sr=SR, mono=False)
-            if y.ndim == 1:
-                y = np.stack([y, y])
             sf.write(str(tmp / "in" / "song.wav"), y.T, SR)
-            progress("      separating stems (BS-RoFormer SW)")
+            progress("      separating stems (BS-RoFormer SW, subprocess)")
             exe = Path(sys.executable).parent / "bs-roformer-infer.exe"
             run = subprocess.run(
                 [str(exe) if exe.is_file() else "bs-roformer-infer",
@@ -122,16 +234,7 @@ def _separate_sw(audio_path: str, progress) -> dict | None:
         progress(f"      SW separation unavailable "
                  f"({type(error).__name__}: {error})")
         return None
-
-    n = min(len(v) for v in raw.values())
-    out = {name: raw[name][:n] for name in DEMUCS_STEMS}
-    # Demucs-equivalent residual: guitar and piano belong in "other" for
-    # every consumer calibrated before SW existed.
-    out["other"] = raw["other"][:n] + raw["guitar"][:n] + raw["piano"][:n]
-    out["guitar"] = raw["guitar"][:n]
-    out["piano"] = raw["piano"][:n]
-    out["sw_other"] = raw["other"][:n]  # the narrow residual, for new work
-    return out
+    return raw
 
 
 def separate(audio_path: str, progress=lambda m: None,
@@ -146,15 +249,32 @@ def separate(audio_path: str, progress=lambda m: None,
     if key in _CACHE:
         return _CACHE[key]
 
+    from . import cache as diskcache
+
+    disk_key = None
     mono = None
     if backend == "sw":
-        mono = _separate_sw(audio_path, progress)
+        try:
+            disk_key = f"sw:{SW_MODEL}:{diskcache.audio_key(str(audio_path))}"
+            raw = diskcache.load_stems(disk_key)
+        except Exception:
+            raw = None
+        if raw is not None and all(k in raw for k in DEMUCS_STEMS + SW_EXTRA):
+            progress("      stems: cached separation reused")
+            mono = _shim(raw)
+        else:
+            mono = _separate_sw(audio_path, progress)
+            if mono is not None and disk_key:
+                diskcache.save_stems(disk_key, {k: mono[k] for k in
+                                                ("drums", "bass", "vocals", "guitar", "piano")}
+                                     | {"other": mono["sw_other"]})
         if mono is None:
             progress("      falling back to Demucs stems")
     if mono is None:
         mono = _separate_demucs(audio_path, progress)
     if mono is None:
         return None
+    mono["_key"] = disk_key or f"demucs:{diskcache.audio_key(str(audio_path))}"
 
     while len(_CACHE) >= _CACHE_LIMIT:
         _CACHE.pop(next(iter(_CACHE)))

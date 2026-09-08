@@ -40,17 +40,42 @@ OPEN = 7
 OPEN_GAP_SEMITONES = 5
 
 
-def transcribe(audio_path: str, progress=lambda m: None):
-    """[(start_s, end_s, midi_pitch, amplitude)] via Basic Pitch (ONNX)."""
+def transcribe(audio_path: str, progress=lambda m: None, cache_key: str | None = None):
+    """[(start_s, end_s, midi_pitch, amplitude)] via Basic Pitch (ONNX).
+
+    cache_key names the audio content (chartgen.cache); when given, a
+    previous transcription of the same content is returned as is, and a
+    fresh one is stored. Basic Pitch on CPU is deterministic, so the cached
+    events are the events it would produce again.
+    """
     import logging
 
+    from . import cache as diskcache
+
+    if cache_key:
+        hit = diskcache.load_transcription(cache_key)
+        if hit is not None:
+            progress("      transcription: cached notes reused")
+            return hit
     logging.getLogger().setLevel(logging.ERROR)  # its TF warnings are noise here
     from basic_pitch.inference import predict
 
     progress("      transcribing notes (Basic Pitch)")
     _, _, note_events = predict(str(audio_path))
-    return [(float(s), float(e), int(p), float(a))
-            for s, e, p, a, *_ in note_events]
+    events = [(float(s), float(e), int(p), float(a))
+              for s, e, p, a, *_ in note_events]
+    if cache_key:
+        diskcache.save_transcription(cache_key, events)
+    return events
+
+
+def cached_transcription(cache_key: str | None):
+    """A previously stored transcription for this key, or None."""
+    if not cache_key:
+        return None
+    from . import cache as diskcache
+
+    return diskcache.load_transcription(cache_key)
 
 
 def _fret_map(pitches: np.ndarray, n_frets: int = 5):

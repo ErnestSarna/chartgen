@@ -389,16 +389,21 @@ def _lands_on_sound(lines, y, sr) -> bool:
 
 def collect(audio_path, tempo, artist: str, title: str, duration_s: float,
             source: str = "auto", progress=lambda m: None,
-            y=None, sr=None) -> list[tuple[int, str]]:
+            y=None, sr=None, lookup=None) -> list[tuple[int, str]]:
     """Lyric events from the best source available.
 
     'auto' looks the song up on LRCLIB and only transcribes if that misses;
-    'online' and 'transcribe' pin one source.
+    'online' and 'transcribe' pin one source. `lookup`, when given, is a
+    zero-argument callable standing in for the LRCLIB query (the pipeline
+    starts the network round trip early and hands its result here).
     """
     if source in ("auto", "online"):
         from . import lrclib
 
-        lines = lrclib.find(artist, title, duration_s, progress=progress)
+        if lookup is not None:
+            lines = lookup()
+        else:
+            lines = lrclib.find(artist, title, duration_s, progress=progress)
         if lines and y is not None:
             shift = align_offset(lines, y, sr, duration_s)
             if shift:

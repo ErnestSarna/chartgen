@@ -1553,6 +1553,28 @@ def test_solo_evidence_is_the_same_with_prefetched_analysis():
             assert a == b, (a, b)
 
 
+def test_rapid_chords_promote_singles_inside_guitar_spans():
+    """Inside a guitar-followed span the chord-single-chord flicker resolves
+    by promotion (the single takes the chord's shape); outside it the
+    chords demote as before."""
+    from chartgen import reduce
+
+    res = 192
+    six = res // 4
+    notes = [(0, 0, 0), (0, 1, 0), (six, 2, 0), (2 * six, 0, 0), (2 * six, 1, 0)]
+
+    def lanes(out):
+        d = {}
+        for t, l, _ in out:
+            d.setdefault(t, set()).add(l)
+        return d
+
+    inside = lanes(reduce.simplify_rapid_chords(notes, res, chord_spans=[(0, 4 * res)]))
+    assert inside[0] == {0, 1} and inside[six] == {0, 1} and inside[2 * six] == {0, 1}, inside
+    outside = lanes(reduce.simplify_rapid_chords(notes, res, chord_spans=[(8 * res, 12 * res)]))
+    assert outside[0] == {0} and outside[2 * six] == {0}, outside
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

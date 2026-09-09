@@ -345,8 +345,19 @@ def derive_lower_tiers_vendored(expert_chart_text: str) -> dict[str, list[Note]]
 
 
 def simplify_rapid_chords(notes: list[Note], resolution: int,
-                          max_chord: int = 3, tempo=None) -> list[Note]:
+                          max_chord: int = 3, tempo=None,
+                          chord_spans=None) -> list[Note]:
     """Demote chords that arrive too fast to re-shape the hand for.
+
+    `chord_spans`: optional [(tick0, tick1)] where the followed-instrument
+    timeline says a chord instrument (guitar) leads. Inside them the
+    16th-single-beside-a-chord case resolves the other way round - the
+    single takes the neighbouring chord's shape - and a same-run off-grid
+    chord is not a stray. Chord audit over 16 songs (2026-09-09): this
+    pass culled a median 90 chords per song, mostly by the flicker and
+    stray rules, taking guitar songs from 35-55% chords to 12-22%
+    against human 40-60%, while on keys/synth songs the same cull was
+    right (Millington 34% -> 10%, human 9%). The instrument decides.
 
     Playtest: three charts were unplayable inside 30 seconds — "combos very
     complex and rapid, some seemed impossible". Against the human charts of
@@ -400,6 +411,28 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
     beside = resolution // 4
     single_ticks = {t for t in ordered
                     if sum(1 for n in groups[t] if n[1] != OPEN) <= 1}
+    in_span = (lambda t: any(a <= t < b for a, b in chord_spans)) if chord_spans else (lambda t: False)
+    # Inside a chord-instrument span a lone single within a 16th of a
+    # chord is the missed second voice: it takes that chord's shape.
+    # Any-neighbour, not only sandwiched: over the nine guitar-led songs
+    # of the chord audit (2026-09-09) the summed chord-share error vs the
+    # human charts is 166 points for any-neighbour, 183 for sandwiched-
+    # only, 204 with no promotion. Seven of nine sit BELOW their charter,
+    # so under-chording is the systematic direction; the two that
+    # overshoot (Thrice, Dream Chaser) over-chord at the transcription
+    # stage already, which no culling rule can distinguish from a
+    # chord-heavy charter.
+    promote_to: dict[int, tuple] = {}
+    for i, t in enumerate(ordered):
+        if t not in single_ticks or not in_span(t):
+            continue
+        for j in (i - 1, i + 1):
+            if 0 <= j < len(ordered) and ordered[j] not in single_ticks \
+                    and abs(ordered[j] - t) <= beside:
+                shape = tuple(sorted(n[1] for n in groups[ordered[j]] if n[1] != OPEN))
+                if 1 < len(shape) <= max_chord:
+                    promote_to[t] = shape
+                    break
     shape_of = {t: frozenset(n[1] for n in groups[t] if n[1] != OPEN)
                 for t in ordered}
     # A demoted chord is itself a single afterwards, so its own 16th
@@ -408,11 +441,11 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
     # unravels into the single-note run it is; a same-shape 16th chug
     # touching one stray single keeps its chords.
     flicker_chords = set()
-    frontier = set(single_ticks)
+    frontier = set(single_ticks) - set(promote_to)
     while frontier:
         new_frontier = set()
         for i, t in enumerate(ordered):
-            if t in single_ticks or t in flicker_chords:
+            if t in single_ticks or t in flicker_chords or in_span(t):
                 continue
             for j in (i - 1, i + 1):
                 if not 0 <= j < len(ordered) or ordered[j] not in frontier:
@@ -435,6 +468,11 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
         opens = [n for n in group if n[1] == OPEN]
         kept = fretted[:max_chord] if fretted else group[:max_chord]
         shape = tuple(n[1] for n in kept)
+
+        if tick in promote_to and fretted:
+            sus = fretted[0][2]
+            kept = [(tick, lane, sus) for lane in promote_to[tick]]
+            shape = promote_to[tick]
 
         if len(shape) > 1 and tick in flicker_chords:
             kept = kept[:1]
@@ -459,12 +497,14 @@ def simplify_rapid_chords(notes: list[Note], resolution: int,
                 # exists to remove (Clocks: the last 8 flickers were all
                 # this rule's own doing inside same-shape 16th runs).
                 stray = (tick in off_grid_chords and tick not in push_ok
+                         and not in_span(tick)
                          and not (shape == prev_shape
                                   and tick - prev_tick <= beside))
                 too_fast = rapid_change or stray or playability.cost(
                     set(prev_shape), set(shape), is_hopo=False) > available
             else:
-                too_fast = rapid_change or tick % (resolution // 2) != 0
+                too_fast = rapid_change or (tick % (resolution // 2) != 0
+                                            and not in_span(tick))
             if too_fast:
                 kept = kept[:1]       # keep the root; the melody survives
                 shape = tuple(n[1] for n in kept)

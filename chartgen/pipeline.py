@@ -388,9 +388,9 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                 expert, added, touched = prominence.rhythm_rescue(
                     expert, followed, st, stemsmod.SR, tempo)
                 if added:
-                    progress(f"      rhythm rescue: {added} note(s) from synth/bass "
-                             f"onsets in {touched} starved run(s) (Basic Pitch hears "
-                             f"9-12% of a drop's notes; stem onsets 45-82%)")
+                    progress(f"      rhythm rescue: {added} note(s) from followed-stem "
+                             f"onsets in {touched} starved run(s) (synth/bass laned by "
+                             f"the filter contour, guitar voiced as the run's chug)")
             solo_model = prominence.load_solo_model()
             if solo_model is not None:
                 timeline_solos = prominence.solo_runs(windows, solo_model, tempo)

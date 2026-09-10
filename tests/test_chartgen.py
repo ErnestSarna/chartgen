@@ -1575,6 +1575,33 @@ def test_rapid_chords_promote_singles_inside_guitar_spans():
     assert outside[0] == {0} and outside[2 * six] == {0}, outside
 
 
+def test_rhythm_rescue_voices_guitar_onsets_with_the_run_chord():
+    """A starved guitar-followed run gains chord chugs at the stem's onsets,
+    shaped like the chords already in the run; nothing lands on existing
+    positions."""
+    from chartgen import prominence
+    from chartgen.tempo import TempoMap
+
+    sr = 44100
+    tm = TempoMap(beat_times=np.arange(0, 60, 0.5), pickup_beats=0)  # 120 bpm
+    res = tm.resolution
+    t = np.arange(0, 8.0, 1 / sr)
+    sig = np.zeros_like(t, dtype=np.float32)
+    for k in range(32):                                        # 8th-note chugs
+        a = int(k * 0.25 * sr)
+        n = np.arange(0, int(0.05 * sr))
+        sig[a:a + len(n)] = (np.sin(2 * np.pi * 110 * n / sr) * np.exp(-n / (0.01 * sr))).astype(np.float32)
+    silent = np.zeros(8 * sr, dtype=np.float32)
+    mono = {"guitar": sig, "sw_other": silent, "bass": silent, "vocals": silent, "piano": silent, "drums": silent}
+    expert = [(0, 0, 0), (0, 1, 0), (4 * res, 0, 0), (4 * res, 1, 0)]   # two G+R chords in 8 s: starved
+    runs = [{"t0": 0.0, "t1": 8.0, "beat0": 0, "beat1": 16, "stem": "guitar", "conf": 0.9}]
+    out, added, touched = prominence.rhythm_rescue(expert, runs, mono, sr, tm)
+    assert touched == 1 and added >= 40, (added, touched)
+    new_ticks = {tk for tk, _, _ in out} - {0, 4 * res}
+    lanes = {tk: {l for t2, l, _ in out if t2 == tk} for tk in new_ticks}
+    assert new_ticks and all(v == {0, 1} for v in lanes.values()), "voiced as the run's G+R chug"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

@@ -362,10 +362,19 @@ def solo_runs(windows, model, tempo):
 # precision. Charters chart the wub's RHYTHM, laned by its filter
 # contour - the same thing brightness lanes do for stuck stretches, but
 # here the notes have to be supplied first.
-RESCUE_STEMS = ("sw_other", "bass")
+RESCUE_STEMS = ("sw_other", "bass", "guitar")
 RESCUE_MIN_ONSETS_PER_S = 3.0     # a real rhythm, not a pad
 RESCUE_STARVED_RATIO = 0.5        # chart holds < half the stem's onsets
 RESCUE_ONSET_DELTA = 0.07         # librosa peak-pick threshold (tested)
+# Guitar joined on 2026-09-09 after its own go/no-go (tools/
+# guitar_onset_gonogo.py): in guitar windows still starved after keyed
+# rescue, new stem onsets at delta 0.05 land on human notes at a median
+# 0.96 precision (min 0.79) and lift coverage of the charter's notes
+# there from ~25% to ~65% (Metabolic 15 -> 60%). Down-tuned palm-muted
+# chugs are where pitched transcription gives up; the onsets do not.
+# Guitar onsets are voiced with the run's chord shape (the chug), not the
+# filter contour that lanes a wub.
+RESCUE_ONSET_DELTA_GUITAR = 0.05
 RESCUE_NOTE_WINDOW_S = 0.12
 RESCUE_MIN_SPAN = 1.3             # centroid p90/p10 below this: static
 RESCUE_MIN_SHARE = 0.10           # stem must carry this much of the window
@@ -423,11 +432,19 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
     # within the signal it is given, so a run segment of a near-silent
     # stem would manufacture dozens of "onsets" out of noise.
     peaks = {}
-    for stem in RESCUE_STEMS:
+    wanted = {r["stem"] for r in followed if r["stem"] in RESCUE_STEMS}
+    for stem in wanted:
         env = librosa.onset.onset_strength(y=mono[stem], sr=sr)
+        delta = RESCUE_ONSET_DELTA_GUITAR if stem == "guitar" else RESCUE_ONSET_DELTA
         frames = librosa.onset.onset_detect(onset_envelope=env, sr=sr, units="frames",
-                                            delta=RESCUE_ONSET_DELTA, backtrack=False)
+                                            delta=delta, backtrack=False)
         peaks[stem] = (librosa.frames_to_time(frames, sr=sr), env[frames])
+    # chord shapes already on the chart, for voicing guitar onsets
+    chord_at = {}
+    for t, l, _ in expert:
+        chord_at.setdefault(t, set()).add(l)
+    chord_at = {t: tuple(sorted(x for x in ls if x <= 4)) for t, ls in chord_at.items()
+                if len([x for x in ls if x <= 4]) == 2}
     hop = int(0.05 * sr)
     envs = {}
     for stem in STEMS + ("drums",):
@@ -490,16 +507,37 @@ def rhythm_rescue(expert, followed, mono, sr, tempo):
         fill = float(np.median(strengths[keep])) if len(keep) else 0.0
         all_str = np.concatenate([strengths[keep], np.full(len(open_times), fill)]) \
             if len(open_times) else strengths[keep]
-        lanes = _lanes_from_contour(_centroids(sig, sr, all_times), all_str)
-        for i, lane in zip(keep, lanes[:len(keep)]):
-            added.append((ticks[i], lane, 0))
+        shape = None
+        if r["stem"] == "guitar":
+            # the run's chug shape: the commonest two-lane chord inside the
+            # run (chord texture has voiced it by now); no chord -> contour
+            lo_r, hi_r = int(r["beat0"] * res), int(r["beat1"] * res)
+            counts = {}
+            for t, sh in chord_at.items():
+                if lo_r <= t < hi_r:
+                    counts[sh] = counts.get(sh, 0) + 1
+            if counts:
+                shape = max(counts, key=counts.get)
+        if shape is not None:
+            voicing = [shape] * (len(keep) + len(opens_here))
+        else:
+            lanes = _lanes_from_contour(_centroids(sig, sr, all_times), all_str)
+            voicing = [(lane,) for lane in lanes]
+        for i, v in zip(keep, voicing[:len(keep)]):
+            for lane in v:
+                added.append((ticks[i], lane, 0))
             by_tick.add(ticks[i])
-        for t, lane in zip(opens_here, lanes[len(keep):]):
-            relaned_opens[t] = lane
+        for t, v in zip(opens_here, voicing[len(keep):]):
+            relaned_opens[t] = v
         touched += 1
     if not added and not relaned_opens:
         return expert, 0, 0
-    out = [(t, relaned_opens.get(t, l) if l == 7 else l, sus) for t, l, sus in expert]
+    out = []
+    for t, l, sus in expert:
+        if l == 7 and t in relaned_opens:
+            out += [(t, lane, sus) for lane in relaned_opens[t]]
+        else:
+            out.append((t, l, sus))
     return sorted(set(out + added)), len(added), touched
 
 

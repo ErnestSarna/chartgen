@@ -82,7 +82,9 @@ if (-not $python) {
 Say "python       $python" "Green"
 
 # ------------------------------------------------------- 2. vendored sources
-# These ship inside the archive. git is only needed if they are missing.
+# Optional: neither is on the default charting path. EasyChartGenerator (MIT)
+# backs the `--reducer easygen` A/B option; ChartFormats (CC0) is the .chart
+# spec, kept for reference. Fetched when git is available, skipped otherwise.
 $repos = @{
     "vendor/EasyChartGenerator" = "https://github.com/Eerovil/EasyChartGenerator.git"
     "vendor/ChartFormats"       = "https://github.com/TheNathannator/GuitarGame_ChartFormats.git"
@@ -90,14 +92,13 @@ $repos = @{
 foreach ($path in $repos.Keys) {
     if (Test-Path $path) { continue }
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Say "$path is missing and git is not installed." "Red"
-        Say "Re-copy the archive (it should contain vendor/) or install git." "Red"
-        exit 1
+        Say "vendor       $path skipped (optional; needs git)" "DarkYellow"
+        continue
     }
-    Say "cloning $path"
+    Say "cloning $path (optional)"
     git clone --depth 1 $repos[$path] $path
+    if ($LASTEXITCODE -ne 0) { Say "vendor       $path skipped (clone failed; optional)" "DarkYellow" }
 }
-Say "vendor       present" "Green"
 
 # ------------------------------------------------------------------ 3. GPU
 $hasNvidia = $false
@@ -135,6 +136,13 @@ if ($LASTEXITCODE -ne 0) {
 Say "`ninstalling everything else ..."
 & $py -m pip install -r requirements.txt
 if ($LASTEXITCODE -ne 0) { Say "dependency install failed" "Red"; exit 1 }
+
+# basic-pitch's wheel demands tensorflow<2.15.1 on Windows/Python>=3.11, which
+# does not exist, so pip refuses it outright. Its ONNX backend needs only
+# onnxruntime (already installed from requirements.txt).
+Say "`ninstalling basic-pitch (transcription model) ..."
+& $py -m pip install "basic-pitch==0.4.0" --no-deps
+if ($LASTEXITCODE -ne 0) { Say "basic-pitch install failed" "Red"; exit 1 }
 
 if ($Training) {
     Say "`ninstalling training stack ..."

@@ -190,10 +190,9 @@ TIPS = {
              "strum with no button held. 60% of human charts use them as "
              "punctuation.",
     "taps": "Marks soft phrases - piano lines, plucks, gentle synth runs - "
-            "as tap notes, playable without strumming. Off by default: "
-            "it's a stylistic choice, and human charters only half-agree "
-            "on when to tap. Worth trying on songs with clear quiet "
-            "passages.",
+            "as tap notes, playable without strumming. It's a stylistic "
+            "choice, and human charters only half-agree on when to tap - "
+            "turn it off if you'd rather strum everything.",
     "grid": "The finest rhythm notes can land on. 16ths fit almost "
             "everything; 8ths force a sparser, easier chart; triplet 8ths "
             "suit shuffle/swing songs.",
@@ -635,6 +634,7 @@ class App:
             asked = self._ask_metadata(Path(audio))
             if asked is None:
                 return  # user closed the prompt: don't chart
+            meta_artist, meta_name = asked
         save_settings(self._settings())
         base = Namespace(
             # URLs must stay strings; Path("https://…") collapses the //.

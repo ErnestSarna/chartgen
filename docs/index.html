@@ -53,6 +53,8 @@ h1{font-size:clamp(34px,6vw,58px);line-height:1.08;letter-spacing:-.025em;font-w
 h1 .glow{color:var(--accent);text-shadow:0 0 34px color-mix(in srgb,var(--accent) 55%,transparent)}
 .sub{max-width:640px;margin:22px auto 0;font-size:clamp(16px,2.3vw,19px);color:var(--muted)}
 .cta-row{display:flex;gap:14px;justify-content:center;margin-top:34px;flex-wrap:wrap}
+.fine{margin-top:14px;font-size:13.5px;color:var(--muted)}
+.install-body a{color:var(--text);text-decoration:underline;text-decoration-color:var(--accent-dim)}
 
 /* equalizer */
 .eq{display:flex;gap:6px;align-items:flex-end;justify-content:center;height:52px;margin:44px auto 0}
@@ -169,13 +171,15 @@ footer{border-top:1px solid var(--line);padding:30px 0 40px;color:var(--muted);f
 <header class="hero"><div class="wrap">
   <span class="kicker">&#9835; AI charting for Clone Hero</span>
   <h1>Any song.<br>A playable chart. <span class="glow">One paste.</span></h1>
-  <p class="sub">Drop a YouTube link or an audio file. chartgen listens to the song and
-  builds a real Clone Hero chart — full difficulty ladder, synced lyrics,
-  star power phrases and all. Charted on your own PC, in minutes.</p>
+  <p class="sub">Drop a YouTube link or an audio file. chartgen separates the recording,
+  transcribes the real notes and writes a complete Clone Hero song folder — Expert
+  through Easy, synced lyrics, star power, solos, album art. On your own PC, in
+  about a minute and a half per song.</p>
   <div class="cta-row">
-    <a class="btn btn-solid" href="https://github.com/ErnestSarna/chartgen">Get chartgen</a>
+    <a class="btn btn-solid" href="https://github.com/ErnestSarna/chartgen/releases/latest">&#11015; Download for Windows</a>
     <a class="btn btn-ghost" href="#how">See how it works</a>
   </div>
+  <p class="fine">Free and open source (MIT). NVIDIA GPU recommended.</p>
 
   <div class="eq" aria-hidden="true">
     <span style="background:var(--g);animation-delay:0s"></span>
@@ -193,7 +197,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 40px;color:var(--muted);f
     <div class="hw-head"><i></i><i></i><i></i><span>chartgen — charting…</span></div>
     <div class="hw-body">
       <div class="hw-line"><span class="tag">&rsaquo;</span> https://youtube.com/watch?v=your-favorite-song
-        <span>&rarr;&nbsp; notes.chart &nbsp;·&nbsp; 4 difficulties &nbsp;·&nbsp; lyrics &nbsp;·&nbsp; star power</span></div>
+        <span>&rarr;&nbsp; notes.chart &nbsp;·&nbsp; 4 difficulties &nbsp;·&nbsp; lyrics &nbsp;·&nbsp; star power &nbsp;·&nbsp; album.png</span></div>
       <div class="lanes">
         <div class="lane"><b class="gem" style="top:12px"></b><b class="gem" style="top:66px"></b></div>
         <div class="lane"><b class="gem" style="top:39px"></b></div>
@@ -214,29 +218,34 @@ footer{border-top:1px solid var(--line);padding:30px 0 40px;color:var(--muted);f
   <div class="grid">
     <div class="card" style="--tint:var(--g)"><div class="icon">&#127925;</div>
       <h3>Paste a link, get a song</h3>
-      <p>YouTube links, whole playlists, or local audio files — MP3, FLAC, WAV, OGG and
-      friends. Batches queue up and chart one after another.</p></div>
+      <p>YouTube links, whole playlists, or local MP3, FLAC, WAV, OGG, Opus and M4A
+      files. Batches queue up and chart one after another; already-charted songs
+      are skipped.</p></div>
     <div class="card" style="--tint:var(--b)"><div class="icon">&#127929;</div>
       <h3>Full difficulty ladder</h3>
-      <p>Easy through Expert, each tier reduced the way human charters do it —
-      calibrated against real hand-made chart libraries, not guesswork.</p></div>
+      <p>Expert, Hard, Medium and Easy, each reduced the way human charters do it —
+      calibrated against an 800-chart library of hand-made charts — plus a 0–6
+      difficulty rating for the song list.</p></div>
     <div class="card" style="--tint:var(--y)"><div class="icon">&#127908;</div>
       <h3>Lyrics, in sync</h3>
-      <p>Looks the song up online first for word-perfect timing, and falls back to
-      listening to the vocals when nobody has synced it yet.</p></div>
+      <p>Looked up on LRCLIB first and word-aligned to the isolated vocal, so lines
+      land on the singer; when nobody has synced the song yet, the vocals are
+      transcribed instead.</p></div>
     <div class="card" style="--tint:var(--o)"><div class="icon">&#11088;</div>
       <h3>Star power &amp; expression</h3>
-      <p>Star power phrases, HOPOs, sustains, tap sections and song sections — the
-      details that make a chart feel charted, not generated.</p></div>
+      <p>Sustains from real note lengths, HOPOs, star power phrases, solo markers,
+      tap sections on soft passages and numbered practice sections — the details
+      that make a chart feel charted, not generated.</p></div>
     <div class="card" style="--tint:var(--r)"><div class="icon">&#127911;</div>
       <h3>Follows the instrument</h3>
-      <p>Separates the song into stems and tracks which instrument a charter would
-      follow, four bars at a time, so taps, solos and rescued passages land where the
-      lead actually is.</p></div>
+      <p>Splits the song into six stems — vocals, drums, bass, guitar, piano, other —
+      and tracks which one a charter would follow, so the chart plays the actual
+      guitar or synth part instead of whatever is loudest.</p></div>
     <div class="card" style="--tint:var(--g)"><div class="icon">&#128274;</div>
       <h3>Yours, locally</h3>
-      <p>Everything runs on your own PC — nothing uploaded anywhere. There's even a
-      phone-friendly web UI so you can queue songs from the couch.</p></div>
+      <p>Separation, transcription and lyric alignment all run on your own PC — your
+      audio never leaves it. There's even a phone-friendly web UI for queuing songs
+      from the couch over your own network.</p></div>
   </div>
 </div></section>
 
@@ -250,13 +259,14 @@ footer{border-top:1px solid var(--line);padding:30px 0 40px;color:var(--muted);f
       files on disk. Artist and title come from the video or the file's tags.</p></div></div>
     <div class="step"><span class="num"></span><div>
       <h3>It listens</h3>
-      <p>The audio is transcribed to notes — pitch, timing, tempo — then snapped to a
-      musical grid that follows the song's beat.</p></div></div>
+      <p>The beat grid is detected, the recording is separated into stems, and
+      Basic Pitch transcribes the real notes — pitch, timing, duration, polyphony —
+      snapped to a grid that follows the song's tempo.</p></div></div>
     <div class="step"><span class="num"></span><div>
       <h3>It charts like a charter</h3>
       <p>Notes become the five frets, riffs stay consistent every time they repeat,
-      sustains ring where the music holds, and the Easy–Expert ladder is reduced tier
-      by tier.</p></div></div>
+      sustains ring where the music holds, taps and solos land where the lead is, and
+      the Expert–Easy ladder is reduced tier by tier.</p></div></div>
     <div class="step"><span class="num"></span><div>
       <h3>Drop it in Clone Hero</h3>
       <p>A finished song folder — <code>notes.chart</code>, audio, album art, synced
@@ -267,23 +277,24 @@ footer{border-top:1px solid var(--line);padding:30px 0 40px;color:var(--muted);f
 <section id="install"><div class="wrap">
   <div class="sec-kicker">Install</div>
   <h2>Two double-clicks and a coffee</h2>
-  <p class="lead">chartgen sets up its own Python and dependencies. No environment
-  wrangling — the installer does everything.</p>
+  <p class="lead">Unzip, run the installer, run the app. It finds or installs Python,
+  picks the right PyTorch build for your GPU and installs everything else.</p>
   <div class="install-card">
     <div class="install-head"><i></i><i></i><i></i></div>
     <div class="install-body">
-<span class="c"># 1 — grab the code</span><br>
-<span class="p">&rsaquo;</span> git clone https://github.com/ErnestSarna/chartgen<br>
-<span class="c"># 2 — run the installer (once, ~3 GB of downloads)</span><br>
+<span class="c"># 1 — download the release zip and unzip it anywhere</span><br>
+<span class="p">&rsaquo;</span> <a href="https://github.com/ErnestSarna/chartgen/releases/latest">chartgen-x.y.z.zip</a><br>
+<span class="c"># 2 — run the installer once (~3 GB of downloads, a few minutes)</span><br>
 <span class="p">&rsaquo;</span> install.bat<br>
-<span class="c"># 3 — chart something</span><br>
+<span class="c"># 3 — open the app and chart something</span><br>
 <span class="p">&rsaquo;</span> chartgen.bat
     </div>
   </div>
   <div class="reqs">
     <span class="req"><b>Windows</b> 10 / 11</span>
-    <span class="req"><b>NVIDIA GPU</b> recommended — CPU works, just slower</span>
-    <span class="req"><b>~3 GB</b> one-time model &amp; dependency download</span>
+    <span class="req"><b>NVIDIA GPU</b> recommended — ~90 s per song vs ~20 min on CPU</span>
+    <span class="req"><b>~3 GB</b> of dependencies, plus ~1.5 GB of models on the first chart</span>
+    <span class="req"><b>Python 3.10–3.14</b> — installed for you if missing</span>
     <span class="req"><b>Clone Hero</b> to play the results</span>
   </div>
 </div></section>
@@ -294,15 +305,16 @@ footer{border-top:1px solid var(--line);padding:30px 0 40px;color:var(--muted);f
   <p class="lead" style="margin-inline:auto">Every song you've ever wanted to play,
   charted while you warm up.</p>
   <div class="cta-row">
-    <a class="btn btn-solid" href="https://github.com/ErnestSarna/chartgen">
+    <a class="btn btn-solid" href="https://github.com/ErnestSarna/chartgen/releases/latest">&#11015; Download for Windows</a>
+    <a class="btn btn-ghost" href="https://github.com/ErnestSarna/chartgen">
       <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-      Get chartgen on GitHub</a>
+      View on GitHub</a>
   </div>
 </div></section>
 
 <footer><div class="wrap"><div class="foot-row">
-  <span>chartgen — an open charting tool for the rhythm-game community.</span>
-  <span>Not affiliated with Clone Hero. Chart music you have the right to use.</span>
+  <span>chartgen — open source (MIT) charting for the rhythm-game community.</span>
+  <span>Not affiliated with Clone Hero. Chart music you have the right to use, for your own play.</span>
 </div></div></footer>
 
 </body>

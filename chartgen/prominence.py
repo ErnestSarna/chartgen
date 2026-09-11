@@ -571,6 +571,69 @@ KEYED_ADMIT_AMPLITUDE = 0.40
 KEYED_MAX_PER_BEAT = 2.0
 
 
+# Bass is deliberately NOT committed: on Hands Up the bass stem's events
+# un-starved the drop windows, rhythm rescue then supplied 105 notes
+# instead of 430 and the chart lost 150 positions (coverage 0.68 -> 0.54);
+# elsewhere bass added <= 13 notes per song. Rhythm rescue is the better
+# supplier for bass-followed windows (onset envelope, not pitch events).
+COMMIT_STEMS = KEYED_STEMS
+
+
+def commit_section_events(events, windows, stem_events, tempo,
+                          min_pitch: int = 40, min_amplitude: float = 0.20,
+                          admit_amplitude: float = None):
+    """Section commitment, supply side (on by default since 2026-09-10,
+    --no-commit-sections to A/B): in every followed window where the stem is audible
+    and playing a line, admit the followed stem's events on the empty 16th
+    ticks - not only where the window is starved (that half is keyed
+    rescue, which runs first and stays as is). The mix's own events are
+    never culled: measured offline on 16 songs (tools/section_commit_eval.py,
+    2026-09-10) the cull trades 12 points of human coverage for 6 of
+    precision, while supply alone lifts coverage inside committed windows
+    0.53 -> 0.61 at unchanged precision, density 0.88 -> 0.93 of human.
+    Same density budget as keyed rescue. Returns (events_to_add,
+    windows_touched, stem_counts)."""
+    from . import transcribe
+
+    admit_amplitude = KEYED_ADMIT_AMPLITUDE if admit_amplitude is None else admit_amplitude
+    known = list(events)
+    added, touched, counts = [], 0, {}
+    for w in windows:
+        stem = w.get("stem")
+        if stem not in COMMIT_STEMS or stem not in stem_events:
+            continue
+        f = w.get("features")
+        if not f or f[stem]["energy"] < KEYED_MIN_SHARE:
+            continue
+        t0, t1 = w["t0"], w["t1"]
+        lo, hi = tempo.quantize(t0, subdiv=4), tempo.quantize(t1, subdiv=4)
+        stem_pos = {tempo.quantize(s0, subdiv=4) for s0, _, pch, amp in stem_events[stem]
+                    if t0 <= s0 < t1 and pch >= min_pitch and amp >= min_amplitude}
+        if len(stem_pos) / max(1e-6, t1 - t0) < KEYED_MIN_STEM_PER_S:
+            continue
+        extra = transcribe.admit_stem_events(stem_events[stem], [(t0, t1)], known, tempo,
+                                             min_pitch, admit_amplitude)
+        if not extra:
+            continue
+        present = len({tempo.quantize(s0, subdiv=4) for s0, _, pch, amp in known
+                       if lo <= tempo.quantize(s0, subdiv=4) < hi
+                       and pch >= min_pitch and amp >= min_amplitude})
+        allowed = max(0, int(KEYED_MAX_PER_BEAT * (hi - lo) / tempo.resolution) - present)
+        ticks_of = {}
+        for e in extra:
+            ticks_of.setdefault(tempo.quantize(e[0], subdiv=4), []).append(e)
+        if len(ticks_of) > allowed:
+            keep_ticks = sorted(ticks_of, key=lambda tk: -max(e[3] for e in ticks_of[tk]))[:allowed]
+            extra = [e for tk in keep_ticks for e in ticks_of[tk]]
+            if not extra:
+                continue
+        added += extra
+        known += extra
+        touched += 1
+        counts[stem] = counts.get(stem, 0) + len(extra)
+    return added, touched, counts
+
+
 def keyed_rescue_events(events, windows, stem_events, tempo,
                         min_pitch: int = 40, min_amplitude: float = 0.20,
                         admit_amplitude: float = None):

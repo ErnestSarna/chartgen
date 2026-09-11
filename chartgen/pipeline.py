@@ -242,6 +242,14 @@ def run(opts, progress=print, should_cancel=lambda: False) -> dict:
                 detail = ", ".join(f"{k} {v}" for k, v in counts.items())
                 progress(f"      keyed rescue: {len(extra)} note(s) from the followed "
                          f"stem in {touched} starved window(s) ({detail})")
+        if windows and not getattr(opts, "no_commit_sections", False):
+            more, touched, counts = prominence.commit_section_events(
+                events + extra, windows, stem_events, tempo)
+            if more:
+                detail = ", ".join(f"{k} {v}" for k, v in counts.items())
+                progress(f"      section commitment: {len(more)} note(s) from the "
+                         f"followed stem in {touched} window(s) ({detail})")
+                extra = extra + more
         # Song-level fallback: where keyed rescue found nothing anywhere
         # (no timeline, or no followed stem playing in the starved
         # windows), the blended stem rescue still fills starved runs.

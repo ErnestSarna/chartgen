@@ -126,6 +126,11 @@ def build_args(argv):
                     help="A/B switch: fill starved stretches with the old blended "
                          "other+bass stem rescue instead of the followed stem's own "
                          "transcription (everything else unchanged)")
+    ap.add_argument("--no-commit-sections", action="store_true",
+                    help="A/B switch: skip section commitment (in every window "
+                         "the followed instrument owns, its stem's notes are "
+                         "admitted on empty ticks, not only where the window is "
+                         "starved); everything else unchanged")
     ap.add_argument("--no-triple-riffs", action="store_true",
                     help="never voice chord runs as three-note chords; by "
                          "default a song whose transcription shows recurring "

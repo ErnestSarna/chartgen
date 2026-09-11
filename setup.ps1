@@ -168,4 +168,4 @@ if ($LASTEXITCODE -ne 0) { Say "verification failed" "Red"; exit 1 }
 if ($LASTEXITCODE -ne 0) { Say "self-checks failed" "Red"; exit 1 }
 
 Say "`nReady. Double-click chartgen.bat to open the app." "Green"
-Say "The first chart downloads the separation and lyric models (~1.5 GB) automatically." "DarkGray"
+Say "The first charts download the separation and lyric models (~2.5 GB in total) automatically." "DarkGray"

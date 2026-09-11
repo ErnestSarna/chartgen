@@ -24,9 +24,9 @@ Everything runs on your own PC. No audio is ever uploaded.
   human charters do it, calibrated against an 800-chart library of hand-made
   charts. A 0–6 `diff_guitar` rating is written for the song list.
 - **The details that make a chart feel charted.** Sustains from real note
-  lengths, HOPOs, star power phrases, numbered practice sections, tap
-  sections on soft passages, solo markers, and riffs that repeat consistently
-  every time the song does.
+  lengths, HOPOs, star power phrases, numbered practice sections, tap notes
+  on synth and piano parts, solo markers where a lead break is found, and
+  riffs that repeat consistently every time the song does.
 - **Lyrics that scroll in time.** Looked up on [LRCLIB](https://lrclib.net)
   first and word-aligned to the vocal stem; when nobody has synced the song
   yet, the vocals are transcribed with
@@ -48,8 +48,9 @@ Guitar (5-fret) only. Songs must be at least 30 seconds.
    roughly 3 GB of downloads.
 3. **Double-click `chartgen.bat`.**
 
-The first song you chart downloads the separation and lyric models
-(about 1.5 GB) automatically; after that everything is local.
+The first songs you chart download the models automatically — about 2.5 GB
+in total: the stem separator (0.7 GB), the lyric aligner (1.2 GB) and the
+speech recogniser (0.5 GB, 0.15 GB CPU-only). After that everything is local.
 
 **Requirements:** Windows 10/11, an internet connection for setup and for
 YouTube links. Python 3.10–3.14 with tkinter (the installer offers to install
@@ -97,7 +98,7 @@ internet.
     notes.chart     all four difficulties, star power, sections, solos, lyrics
     song.ini        name, artist, charter, length, diff_guitar, preview time
     song.opus       the audio (mp3/ogg/opus inputs are copied as-is)
-    album.png       from the file's embedded art or the YouTube thumbnail
+    album.png       when available: the file's embedded art or the YouTube thumbnail
 ```
 
 Every generated song is titled "… [chartgen]" so it is always distinguishable
@@ -111,7 +112,9 @@ from a human chart in the song list.
   sent to lrclib.net to look up synced lyrics. Use `--no-lyrics` or the
   "Listen to the vocals" lyric source to avoid that.
 - YouTube links are fetched with yt-dlp. Downloads stay in
-  `<Save to>/_downloads/`.
+  `<Save to>/_downloads/`. Artist and title are parsed from the video title,
+  so a channel's suffix (e.g. "| House | NCS") can end up in the song name —
+  the CLI's `--name`/`--artist` override it.
 - Model weights download once on first use (BS-RoFormer from the UVR public
   model mirror, faster-whisper from Hugging Face, the forced aligner from
   PyTorch's CDN). Stems and transcriptions are cached under

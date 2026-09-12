@@ -32,10 +32,11 @@ a{color:var(--accent);text-decoration:none}
 /* ---------- nav ---------- */
 nav{position:sticky;top:0;z-index:20;border-bottom:1px solid var(--line);
   background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(10px)}
-.navbar{display:flex;align-items:center;gap:12px;padding:14px 24px;max-width:1040px;margin:0 auto}
+.navbar{display:flex;align-items:center;gap:12px;padding:14px 24px;max-width:1040px;margin:0 auto;min-width:0}
 .logo{width:28px;height:28px;flex:none}
 .brand{font-weight:700;font-size:18px;letter-spacing:-.01em;color:var(--text)}
-.nav-links{margin-left:auto;display:flex;gap:22px;align-items:center;font-size:14.5px}
+.nav-links{margin-left:auto;display:flex;gap:22px;align-items:center;font-size:14.5px;flex:none}
+.nav-links a{white-space:nowrap}
 .nav-links a{color:var(--muted);transition:color .15s}
 .nav-links a:hover{color:var(--text)}
 .btn{display:inline-flex;align-items:center;gap:8px;font-weight:650;font-size:15px;
@@ -147,6 +148,11 @@ footer{border-top:1px solid var(--line);padding:30px 0 40px;color:var(--muted);f
 .foot-row{display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:space-between}
 
 @media (max-width:640px){
+  .navbar{padding:12px 16px;gap:10px}
+  .nav-links{gap:14px}
+  .nav-links a:not(.btn){display:none}
+  .nav-links .btn{padding:8px 10px}
+  .nav-links .btn span{display:none}
   .hero{padding-top:64px}
   section{padding:60px 0}
   .step{grid-template-columns:1fr;gap:10px}
@@ -169,7 +175,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 40px;color:var(--muted);f
     <a href="#install">Install</a>
     <a class="btn btn-ghost" href="https://github.com/ErnestSarna/chartgen">
       <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-      GitHub</a>
+      <span>GitHub</span></a>
   </div>
 </div></nav>
 

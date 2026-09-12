@@ -7,7 +7,7 @@ art — ready to drop into your Songs directory.
 
 Everything runs on your own PC. No audio is ever uploaded.
 
-**Website:** https://ernestsarna.github.io/chartgen/
+**Website:** https://chartgen.org
 
 ## What it does
 

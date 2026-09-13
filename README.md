@@ -32,8 +32,9 @@ Everything runs on your own PC. No audio is ever uploaded.
   yet, the vocals are transcribed with
   [faster-whisper](https://github.com/SYSTRAN/faster-whisper) instead.
 - **Three ways to use it.** A desktop app, a command line, and a
-  phone-friendly web page for queuing songs from the couch over your own
-  network.
+  phone-friendly web page that hands the finished song back to whatever
+  device you're on — from the couch, or from anywhere with a free Cloudflare
+  Tunnel in front.
 
 Guitar (5-fret) only. Songs must be at least 30 seconds.
 
@@ -85,10 +86,15 @@ python -m chartgen --help
 Artist and title come from the video title or the file's tags. Override them
 for a single song with `--artist` and `--name`.
 
-**Web UI** (`chartgen-web.bat`): serves a page on port 8471 where any device
-on your network can paste links, upload files, watch the queue and download
-finished songs as zips. It has **no login** on purpose — reach it over
-Tailscale or another private network, and never port-forward it to the open
+**Web UI** (`chartgen-web.bat`): a page where any device can paste links or
+upload files, watch its own queue, and get each finished song back as a zip —
+downloaded to that device automatically. Put it behind a free Cloudflare
+Tunnel + Access login and it works from anywhere (see
+[docs/remote-access.md](docs/remote-access.md)): people you list as owners
+get songs saved to the PC's library too; anyone else is a guest whose song
+is charted, handed over, and deleted from the PC. Without Access in front it
+has **no login**, so on a LAN or Tailscale (`chartgen-web.bat --host
+0.0.0.0`) treat it as a shared queue, and never port-forward it to the open
 internet.
 
 ## Output

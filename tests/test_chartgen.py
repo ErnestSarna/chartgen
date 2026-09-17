@@ -574,6 +574,13 @@ def test_youtube_url_detection_and_title_parsing():
     assert parse_title("Alan Walker - Faded (Official Video)") == ("Alan Walker", "Faded")
     assert parse_title("Daft Punk - Get Lucky [Official Audio] (HD)") == ("Daft Punk", "Get Lucky")
     assert parse_title("Bohemian Rhapsody (Remastered 2011)") == ("", "Bohemian Rhapsody")
+    # Auto-generated music channels and label channels carry suffixes that are
+    # not part of the artist's name.
+    from chartgen.youtube import channel_artist
+    assert channel_artist("Astron - Topic") == "Astron"
+    assert channel_artist("QueenVEVO") == "Queen"
+    assert channel_artist("NoCopyrightSounds") == "NoCopyrightSounds"
+    assert channel_artist(None) == ""
     artist, name = parse_title("YOASOBI「アイドル」 Official Music Video")
     assert name, (artist, name)
 

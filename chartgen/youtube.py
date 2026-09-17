@@ -63,6 +63,19 @@ def expand_inputs(items, progress=lambda m: None) -> list:
     return out
 
 
+def channel_artist(uploader: str | None) -> str:
+    """An uploader name usable as the artist, or ''.
+
+    YouTube's auto-generated music channels are all called "<Artist> - Topic",
+    and labels often upload as "<Artist>VEVO"; both suffixes are channel
+    plumbing, not part of the name.
+    """
+    name = (uploader or "").strip()
+    name = re.sub(r"\s*-\s*Topic$", "", name, flags=re.I)
+    name = re.sub(r"VEVO$", "", name, flags=re.I).strip()
+    return name
+
+
 def parse_title(title: str) -> tuple[str, str]:
     """(artist, song) guessed from a video title; artist may come back ''."""
     clean = NOISE_RE.sub(" ", title).strip(" -–—|")
@@ -149,7 +162,7 @@ def download(url: str, dest_dir: Path, progress=lambda m: None,
     artist, name = parse_title(title)
     return {
         "audio": wav,
-        "artist": artist or (info.get("uploader") or "Unknown"),
+        "artist": artist or channel_artist(info.get("uploader")) or "Unknown",
         "name": name or title,
         "title": title,
         "thumbnail": info.get("thumbnail"),
